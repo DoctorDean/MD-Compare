@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+
+"""
+MD-Compare: Command-line interface for molecular dynamics comparison analysis
+
+This script provides the main command-line interface for comparing molecular dynamics
+simulations using network analysis methods.
+"""
+
+import argparse
+import sys
+import json
+from pathlib import Path
+from typing import List, Dict, Any
+
+try:
+    from md_compare_core import (
+        MDCompare, SimulationConfig, AnalysisConfig, 
+        MDSimulation, NetworkAnalyzer, MDComparator
+    )
+    from utils import PerformanceMonitor, save_analysis_config
+except ImportError:
+    print("Error: MD-Compare core modules not found. Ensure proper installation.")
+    sys.exit(1)
+
+
+def create_simulation_config_from_args(name: str, topology: str, trajectory: str, 
+                                     description: str = "", selection: str = "protein and not name H*") -> SimulationConfig:
+    """Create simulation configuration from command line arguments"""
+    return SimulationConfig(
+        name=name,
+        topology=topology, 
+        trajectory=trajectory,
+        selection=selection,
+        description=description
+    )
+
+
+def create_analysis_config_from_args(args) -> AnalysisConfig:
+    """Create analysis configuration from command line arguments"""
+    return AnalysisConfig(
+        cutoffs={'all_atom': args.cutoff, 'ca_only': args.cutoff * 1.8},
+        interaction_types=args.interaction_types,
+        threshold=args.threshold,
+        timeout_seconds=args.timeout,
+        segments=args.segments,
+        preprocess=not args.no_preprocess,
+        align_selection=args.align_selection,
+        center_selection=args.center_selection
+    )
+
+
+def run_single_analysis(args):
+    """Run analysis on a single simulation"""
+    print("Running single simulation analysis...")
+    
+    # Create configurations
+    sim_config = create_simulation_config_from_args(
+        name=args.name,
+        topology=args.topology,
+        trajectory=args.trajectory,
+        description=f"Single simulation analysis: {args.name}",
+        selection=args.selection
+    )
+    
+    analysis_config = create_analysis_config_from_args(args)
+    
+    # Initialize MD-Compare workflow
+    md_compare = MDCompare(analysis_config, args.output)
+    
+    # Performance monitoring
+    monitor = PerformanceMonitor()
+    
+    try:
+        # Add simulation
+        monitor.start_step("Loading simulation")
+        success = md_compare.add_simulation(sim_config)
+        monitor.end_step()
+        
+        if not success:
+            print(f"Failed to load simulation: {args.name}")
+            return 1
+        
+        # Run analysis
+        monitor.start_step("Computing contact maps")
+        analysis_results = md_compare.run_analysis([args.name])
+        monitor.end_step()
+        
+        # Print results summary
+        if args.name in analysis_results:
+            results = analysis_results[args.name]
+            print(f"\nAnalysis Results for {args.name}:")
+            print(f"  Contact maps: {results['contact_maps_computed']}")
+            print(f"  Network nodes: {results['network_nodes']}")
+            print(f"  Network edges: {results['network_edges']}")
+            print(f"  Network density: {results['network_density']:.4f}")
+        
+        # Save configuration
+        config_path = Path(args.output) / "analysis_config.json"
+        save_analysis_config(analysis_config, config_path)
+        
+        monitor.print_summary()
+        print(f"\nResults saved to: {args.output}")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"Error during analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def run_comparison_analysis(args):
+    """Run comparison analysis on multiple simulations"""
+    print("Running multi-simulation comparison analysis...")
+    
+    # Parse simulation configurations from JSON file
+    try:
+        with open(args.config, 'r') as f:
+            config_data = json.load(f)
+    except Exception as e:
+        print(f"Error loading configuration file: {e}")
+        return 1
+    
+    # Create simulation configurations
+    sim_configs = []
+    for sim_data in config_data.get('simulations', []):
+        sim_config = SimulationConfig(
+            name=sim_data['name'],
+            topology=sim_data['topology'],
+            trajectory=sim_data['trajectory'],
+            selection=sim_data.get('selection', 'protein and not name H*'),
+            description=sim_data.get('description', ''),
+            metadata=sim_data.get('metadata', {})
+        )
+        sim_configs.append(sim_config)
+    
+    if len(sim_configs) < 2:
+        print("Error: Need at least 2 simulations for comparison")
+        return 1
+    
+    # Create analysis configuration
+    analysis_config = create_analysis_config_from_args(args)
+    
+    # Override with config file settings if provided
+    if 'analysis' in config_data:
+        analysis_data = config_data['analysis']
+        for key, value in analysis_data.items():
+            if hasattr(analysis_config, key):
+                setattr(analysis_config, key, value)
+    
+    # Initialize MD-Compare workflow
+    md_compare = MDCompare(analysis_config, args.output)
+    
+    # Performance monitoring
+    monitor = PerformanceMonitor()
+    
+    try:
+        # Run full workflow
+        monitor.start_step("Full workflow")
+        results = md_compare.run_full_workflow(sim_configs)
+        monitor.end_step()
+        
+        # Print summary
+        print(f"\nComparison Analysis Complete:")
+        print(f"  Simulations analyzed: {len(results['simulations_analyzed'])}")
+        
+        if 'comparative_analysis' in results:
+            comp_analysis = results['comparative_analysis']
+            if 'network_properties' in comp_analysis:
+                print(f"  Network property comparison: Available")
+            if 'centrality_measures' in comp_analysis:
+                print(f"  Centrality comparison: Available")
+            if 'contact_patterns' in comp_analysis:
+                print(f"  Contact pattern comparison: Available")
+        
+        monitor.print_summary()
+        print(f"\nResults saved to: {args.output}")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"Error during comparison: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def run_differential_analysis(args):
+    """Run differential analysis between two specific simulations"""
+    print(f"Running differential analysis: {args.sim1} vs {args.sim2}")
+    
+    # Load both simulations
+    sim1_config = create_simulation_config_from_args(
+        name=args.sim1,
+        topology=args.topology1,
+        trajectory=args.trajectory1,
+        selection=args.selection
+    )
+    
+    sim2_config = create_simulation_config_from_args(
+        name=args.sim2,
+        topology=args.topology2,
+        trajectory=args.trajectory2,
+        selection=args.selection
+    )
+    
+    analysis_config = create_analysis_config_from_args(args)
+    
+    # Initialize workflow
+    md_compare = MDCompare(analysis_config, args.output)
+    
+    monitor = PerformanceMonitor()
+    
+    try:
+        # Add simulations
+        monitor.start_step("Loading simulations")
+        success1 = md_compare.add_simulation(sim1_config)
+        success2 = md_compare.add_simulation(sim2_config)
+        monitor.end_step()
+        
+        if not (success1 and success2):
+            print("Failed to load one or both simulations")
+            return 1
+        
+        # Run analyses
+        monitor.start_step("Running analyses")
+        md_compare.run_analysis([args.sim1, args.sim2])
+        monitor.end_step()
+        
+        # Run comparison
+        monitor.start_step("Running comparison")
+        comparison_results = md_compare.run_comparison([args.sim1, args.sim2])
+        monitor.end_step()
+        
+        # Run differential analysis
+        monitor.start_step("Differential analysis")
+        differential_results = md_compare.comparator.find_differential_contacts(
+            args.sim1, args.sim2, args.diff_threshold
+        )
+        
+        # Save differential results
+        diff_output = Path(args.output) / f"differential_{args.sim1}_vs_{args.sim2}.json"
+        with open(diff_output, 'w') as f:
+            json.dump(differential_results, f, indent=2, default=str)
+        
+        monitor.end_step()
+        
+        # Print summary
+        print(f"\nDifferential Analysis Results:")
+        print(f"  Increased contacts: {differential_results['n_increased']}")
+        print(f"  Decreased contacts: {differential_results['n_decreased']}")
+        print(f"  Threshold: {differential_results['threshold_difference']}")
+        
+        if differential_results['n_increased'] > 0:
+            top_increase = differential_results['increased_contacts'][0]
+            print(f"  Top increase: {top_increase['residue_pair']} (+{top_increase['difference']:.3f})")
+        
+        if differential_results['n_decreased'] > 0:
+            top_decrease = differential_results['decreased_contacts'][0]
+            print(f"  Top decrease: {top_decrease['residue_pair']} ({top_decrease['difference']:.3f})")
+        
+        monitor.print_summary()
+        print(f"\nResults saved to: {args.output}")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"Error during differential analysis: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def create_example_config(output_path: str):
+    """Create an example configuration file"""
+    example_config = {
+        "simulations": [
+            {
+                "name": "wildtype",
+                "topology": "wt_system.pdb",
+                "trajectory": "wt_trajectory.xtc",
+                "selection": "protein and not name H*",
+                "description": "Wild-type simulation",
+                "metadata": {
+                    "temperature": 300,
+                    "pressure": 1.0,
+                    "force_field": "CHARMM36"
+                }
+            },
+            {
+                "name": "mutant",
+                "topology": "mut_system.pdb", 
+                "trajectory": "mut_trajectory.xtc",
+                "selection": "protein and not name H*",
+                "description": "Mutant simulation",
+                "metadata": {
+                    "mutations": ["L10F", "G48V"],
+                    "temperature": 300,
+                    "pressure": 1.0,
+                    "force_field": "CHARMM36"
+                }
+            }
+        ],
+        "analysis": {
+            "cutoffs": {
+                "all_atom": 4.5,
+                "ca_only": 8.0
+            },
+            "interaction_types": ["distance", "hbond"],
+            "threshold": 0.2,
+            "timeout_seconds": 300,
+            "segments": 5,
+            "preprocess": true,
+            "align_selection": "name CA",
+            "center_selection": "protein"
+        }
+    }
+    
+    with open(output_path, 'w') as f:
+        json.dump(example_config, f, indent=2)
+    
+    print(f"Example configuration saved to: {output_path}")
+
+
+def main():
+    """Main entry point for MD-Compare CLI"""
+    
+    # Main parser
+    parser = argparse.ArgumentParser(
+        description="MD-Compare: Comprehensive toolkit for comparing molecular dynamics simulations",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+
+  # Single simulation analysis
+  md-compare single -t system.pdb -x trajectory.xtc -n my_sim -o results/
+
+  # Multiple simulation comparison
+  md-compare compare -c simulations.json -o comparison_results/
+
+  # Differential analysis
+  md-compare diff -t1 wt.pdb -x1 wt.xtc -n1 wildtype \\
+                  -t2 mut.pdb -x2 mut.xtc -n2 mutant -o diff_results/
+
+  # Generate example configuration
+  md-compare example-config -o example_simulations.json
+
+For more information, visit: https://github.com/yourusername/md-compare
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='mode', help='Analysis mode')
+    
+    # Single simulation analysis
+    single_parser = subparsers.add_parser(
+        'single', 
+        help='Analyze a single simulation'
+    )
+    single_parser.add_argument('-t', '--topology', required=True,
+                              help='Topology file (PDB, GRO, etc.)')
+    single_parser.add_argument('-x', '--trajectory', required=True,
+                              help='Trajectory file (XTC, DCD, etc.)')
+    single_parser.add_argument('-n', '--name', required=True,
+                              help='Name for this simulation')
+    single_parser.add_argument('-o', '--output', default='md_compare_results',
+                              help='Output directory')
+    single_parser.add_argument('--selection', default='protein and not name H*',
+                              help='Atom selection string')
+    single_parser.add_argument('--cutoff', type=float, default=4.5,
+                              help='Contact distance cutoff (Å)')
+    single_parser.add_argument('--threshold', type=float, default=0.2,
+                              help='Contact frequency threshold for network edges')
+    single_parser.add_argument('--interaction-types', nargs='+',
+                              choices=['distance', 'hbond', 'salt_bridge'],
+                              default=['distance'],
+                              help='Types of interactions to analyze')
+    single_parser.add_argument('--segments', type=int, default=5,
+                              help='Number of trajectory segments for statistical analysis')
+    single_parser.add_argument('--timeout', type=int, default=300,
+                              help='Timeout for expensive computations (seconds)')
+    single_parser.add_argument('--no-preprocess', action='store_true',
+                              help='Disable MD preprocessing')
+    single_parser.add_argument('--align-selection', default='name CA',
+                              help='Selection for structural alignment')
+    single_parser.add_argument('--center-selection', default='protein',
+                              help='Selection for centering')
+    
+    # Multiple simulation comparison
+    compare_parser = subparsers.add_parser(
+        'compare',
+        help='Compare multiple simulations'
+    )
+    compare_parser.add_argument('-c', '--config', required=True,
+                               help='JSON configuration file with simulation details')
+    compare_parser.add_argument('-o', '--output', default='md_compare_results',
+                               help='Output directory')
+    compare_parser.add_argument('--cutoff', type=float, default=4.5,
+                               help='Contact distance cutoff (Å)')
+    compare_parser.add_argument('--threshold', type=float, default=0.2,
+                               help='Contact frequency threshold')
+    compare_parser.add_argument('--interaction-types', nargs='+',
+                               choices=['distance', 'hbond', 'salt_bridge'],
+                               default=['distance'],
+                               help='Types of interactions to analyze')
+    compare_parser.add_argument('--segments', type=int, default=5,
+                               help='Number of trajectory segments')
+    compare_parser.add_argument('--timeout', type=int, default=300,
+                               help='Timeout for expensive computations (seconds)')
+    compare_parser.add_argument('--no-preprocess', action='store_true',
+                               help='Disable MD preprocessing')
+    compare_parser.add_argument('--align-selection', default='name CA',
+                               help='Selection for structural alignment')
+    compare_parser.add_argument('--center-selection', default='protein',
+                               help='Selection for centering')
+    
+    # Differential analysis
+    diff_parser = subparsers.add_parser(
+        'diff',
+        help='Differential analysis between two simulations'
+    )
+    diff_parser.add_argument('-t1', '--topology1', required=True,
+                            help='Topology file for first simulation')
+    diff_parser.add_argument('-x1', '--trajectory1', required=True,
+                            help='Trajectory file for first simulation')
+    diff_parser.add_argument('-n1', '--sim1', required=True,
+                            help='Name for first simulation')
+    diff_parser.add_argument('-t2', '--topology2', required=True,
+                            help='Topology file for second simulation')
+    diff_parser.add_argument('-x2', '--trajectory2', required=True,
+                            help='Trajectory file for second simulation')
+    diff_parser.add_argument('-n2', '--sim2', required=True,
+                            help='Name for second simulation')
+    diff_parser.add_argument('-o', '--output', default='md_compare_results',
+                            help='Output directory')
+    diff_parser.add_argument('--selection', default='protein and not name H*',
+                            help='Atom selection string')
+    diff_parser.add_argument('--cutoff', type=float, default=4.5,
+                            help='Contact distance cutoff (Å)')
+    diff_parser.add_argument('--threshold', type=float, default=0.2,
+                            help='Contact frequency threshold')
+    diff_parser.add_argument('--diff-threshold', type=float, default=0.1,
+                            help='Minimum difference for significant contacts')
+    diff_parser.add_argument('--interaction-types', nargs='+',
+                            choices=['distance', 'hbond', 'salt_bridge'],
+                            default=['distance'],
+                            help='Types of interactions to analyze')
+    diff_parser.add_argument('--segments', type=int, default=5,
+                            help='Number of trajectory segments')
+    diff_parser.add_argument('--timeout', type=int, default=300,
+                            help='Timeout for expensive computations (seconds)')
+    diff_parser.add_argument('--no-preprocess', action='store_true',
+                            help='Disable MD preprocessing')
+    diff_parser.add_argument('--align-selection', default='name CA',
+                            help='Selection for structural alignment')
+    diff_parser.add_argument('--center-selection', default='protein',
+                            help='Selection for centering')
+    
+    # Example configuration generator
+    example_parser = subparsers.add_parser(
+        'example-config',
+        help='Generate an example configuration file'
+    )
+    example_parser.add_argument('-o', '--output', default='example_config.json',
+                               help='Output path for example configuration')
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    if args.mode is None:
+        parser.print_help()
+        return 1
+    
+    # Route to appropriate function
+    if args.mode == 'single':
+        return run_single_analysis(args)
+    elif args.mode == 'compare':
+        return run_comparison_analysis(args)
+    elif args.mode == 'diff':
+        return run_differential_analysis(args)
+    elif args.mode == 'example-config':
+        create_example_config(args.output)
+        return 0
+    else:
+        print(f"Unknown mode: {args.mode}")
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

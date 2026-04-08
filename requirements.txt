@@ -1,0 +1,65 @@
+# Core dependencies for MD-Compare: Molecular Dynamics Simulation Comparison Toolkit
+# Install with: pip install -r requirements.txt
+
+# Molecular dynamics analysis
+MDAnalysis>=2.4.0
+MDAnalysisTests>=2.4.0
+
+# Network analysis
+networkx>=2.8
+
+# Numerical computing
+numpy>=1.21.0
+scipy>=1.7.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+
+# Data manipulation and analysis
+pandas>=1.3.0          # For data manipulation and comparative analysis
+scikit-learn>=1.0.0    # For statistical analysis and clustering
+
+# Progress monitoring and utilities
+tqdm>=4.62.0           # Progress bars for long computations
+jupyter>=1.0.0         # For interactive analysis notebooks
+
+# For enhanced visualizations (optional)
+plotly>=5.0.0          # Interactive plots
+ipywidgets>=7.6.0      # Jupyter widgets
+
+# For network visualization (optional)
+pygraphviz>=1.7        # Graph layout algorithms (requires graphviz system package)
+
+# Memory profiling (development)
+memory-profiler>=0.60.0  # Monitor memory usage
+
+# Testing (development)
+pytest>=6.0.0
+pytest-cov>=3.0.0
+
+# Documentation (development)  
+sphinx>=4.0.0
+sphinx-rtd-theme>=1.0.0
+
+# Code quality (development)
+flake8>=4.0.0
+black>=22.0.0
+
+# Molecular file format support (optional)
+# Uncomment if working with additional formats
+# openmm>=7.7.0         # OpenMM format support
+# parmed>=3.4.0         # AMBER parameter files
+# rdkit>=2022.03.0      # Chemical informatics
+
+# System requirements notes:
+# - Python >= 3.8
+# - For Desmond support: ensure MDAnalysis can read .dtr files
+# - For graphviz: install system package (apt install graphviz, brew install graphviz, etc.)
+# - Recommended: conda environment for easier package management
+#
+# Installation example:
+# conda create -n md_compare python=3.9
+# conda activate md_compare
+# pip install -r requirements.txt
+
