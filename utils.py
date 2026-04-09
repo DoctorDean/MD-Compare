@@ -27,6 +27,7 @@ except ImportError:
 def timeout_handler(seconds):
     """
     Context manager for timing out long-running operations
+    Cross-platform compatible (Windows/Unix)
     
     Parameters:
     -----------
@@ -35,12 +36,21 @@ def timeout_handler(seconds):
         
     Raises:
     -------
-    TimeoutError : If operation exceeds timeout
+    TimeoutError : If operation exceeds timeout (Unix only)
     """
+    import platform
+    
+    if platform.system() == 'Windows':
+        # Windows doesn't support SIGALRM, so we skip timeout functionality
+        # Operations will run to completion
+        print(f"Note: Timeout functionality not available on Windows, running without timeout")
+        yield
+        return
+    
     def timeout_signal_handler(signum, frame):
         raise TimeoutError(f"Operation timed out after {seconds} seconds")
     
-    # Set up signal handler
+    # Set up signal handler (Unix/Linux only)
     old_handler = signal.signal(signal.SIGALRM, timeout_signal_handler)
     signal.alarm(seconds)
     

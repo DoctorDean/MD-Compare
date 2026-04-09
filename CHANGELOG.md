@@ -9,9 +9,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned
 - Integration with protein structure databases (PDB, AlphaFold)
-- Machine learning models 
+- Machine learning models
 - Support for additional interaction types (π-π stacking, cation-π)
-- Enhanced visualization 
+- Enhanced visualization
+
+## [1.1.0] - 2026-04-09
+
+### Added
+- **Dynamic Analysis Capabilities**: 
+  - Dynamic Cross-Correlation Matrix (DCCM) analysis for residue motion correlations
+  - Principal Component Analysis (PCA) for identifying dominant motion modes
+  - Automatic integration with existing network analysis workflow
+
+- **New CLI Options**:
+  - `--compute-dccm` / `--no-dccm` flags for DCCM computation control (default: enabled)
+  - `--compute-pca` / `--no-pca` flags for PCA analysis control (default: enabled)
+  - `--pca-components N` to specify number of principal components (default: 10)
+  - `--dccm-selection "selection"` to specify atoms for dynamic analysis (default: "name CA")
+
+- **Enhanced Output Files**:
+  - `*_dccm_matrix.npy/.csv` - Dynamic cross-correlation matrices
+  - `*_dccm_heatmap.png` - DCCM visualization heatmaps
+  - `*_pca_eigenvalues.npy` - PCA eigenvalues and variance explained
+  - `*_pca_eigenvectors.npy` - PCA eigenvectors (motion modes)
+  - `*_pca_variance_explained.npy` - Variance explained by each component
+  - `*_principal_components.npy` - Trajectory projections onto PCs
+  - `*_pca_analysis.png` - Comprehensive PCA plots (scree, variance, projections)
+  - `*_pca_summary.txt` - PCA analysis summary with variance breakdown
+  - `*_dynamic_summary.txt` - Overall dynamic analysis summary
+
+- **Advanced Visualization**:
+  - Automatic DCCM heatmap generation with diverging colormap
+  - Multi-panel PCA analysis plots (eigenvalue spectrum, variance explained, trajectory projections)
+  - Color-coded correlation matrices showing positive/negative correlations
+  - PC1-PC2 trajectory evolution plots with temporal coloring
+
+### Changed
+- **AnalysisConfig**: Extended with dynamic analysis configuration options
+  - Added `compute_dccm`, `compute_pca`, `pca_components`, `dccm_selection` parameters
+- **NetworkMetrics**: Extended dataclass to include DCCM and PCA results
+- **CLI Interface**: All analysis modes (single, compare, diff) now support dynamic analysis flags
+- **Output Management**: Automatic saving and visualization of dynamic analysis results
+
+### Enhanced
+- **Example 1**: Updated single simulation example with DCCM and PCA usage demonstrations
+- **Documentation**: Added dynamic analysis interpretation guidelines and advanced analysis scripts
+- **Error Handling**: Graceful fallback when dynamic analysis fails due to insufficient data
+- **Memory Management**: Efficient coordinate collection and matrix operations for large systems
+
+### Performance
+- **Coordinate Collection**: Optimized trajectory iteration for dynamic analysis
+- **Matrix Operations**: Efficient DCCM computation with vectorized operations
+- **Progress Monitoring**: Detailed progress reporting for long DCCM computations
+- **Memory Optimization**: Smart handling of large coordinate arrays
+
+### Technical Improvements
+- **PCA Implementation**: Robust eigenvalue decomposition with proper variance calculation
+- **DCCM Algorithm**: Mathematically correct cross-correlation computation
+- **Preprocessing Integration**: Proper alignment and centering for dynamic analysis
+- **Visualization Pipeline**: Automated generation of publication-quality plots
+
+### Dependencies
+- **SciPy**: Enhanced requirement for robust linear algebra operations (`scipy.linalg.eigh`)
+- **Matplotlib/Seaborn**: Leveraged for advanced visualization capabilities
+- **NumPy**: Optimized matrix operations for efficient DCCM/PCA computation
+
+### Usage Examples
+```bash
+# Enable all dynamic analysis (default)
+md-compare single -t system.pdb -x traj.xtc -n analysis
+
+# Customize PCA components and selection
+md-compare single -t system.pdb -x traj.xtc -n analysis \
+  --pca-components 15 --dccm-selection "backbone"
+
+# Disable dynamic analysis for speed
+md-compare single -t system.pdb -x traj.xtc -n analysis \
+  --no-dccm --no-pca
+```
 
 ## [1.0.0] - 2026-04-08
 
@@ -126,7 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-condition comparative studies
 - Community structure and modular organization analysis
 
-## [0.9.0] - 2024-12-XX (Development/Pre-release)
+## [0.9.0] - 2026-04-06 (Development/Pre-release)
 
 ### Added
 - Basic residue interaction network analysis framework
@@ -156,18 +231,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Previous major version**: Security updates and critical bug fixes  
 - **Older versions**: Community support only
 
-## Migration Guide
+## Migration Notes
 
-### From Development to v1.0.0
-- Adopt new class-based architecture (MDSimulation, NetworkAnalyzer, MDComparator)
-- Update to new CLI command structure (`md-compare single/compare/diff`)
-- Migrate to JSON-based configuration files for multi-simulation analyses
-- Update import statements to use new module structure
+### From v1.0.0 to v1.1.0
+- **Dynamic analysis enabled by default**: New installations will automatically compute DCCM and PCA
+- **New output files**: Expect additional files in results directories (*_dccm_*, *_pca_*)
+- **CLI compatibility**: All existing commands work unchanged; new flags are optional
+- **Performance impact**: Analysis takes ~20-30% longer due to dynamic analysis
+- **Memory requirements**: Increased memory usage for coordinate storage during DCCM/PCA
 
-### Configuration File Format Changes
-- New JSON schema with `simulations` and `analysis` sections
-- Enhanced metadata support for tracking simulation conditions
-- Flexible parameter specification with reasonable defaults
+### For Existing Users:
+- **Backward compatibility**: All v1.0.0 commands work identically in v1.1.0
+- **Optional features**: Use `--no-dccm --no-pca` to replicate v1.0.0 behavior exactly
+- **Output structure**: New files added to existing output directories without conflicts
+- **Configuration files**: JSON configs automatically gain dynamic analysis options
+
+### For Developers:
+- **NetworkMetrics dataclass**: Extended with optional DCCM/PCA fields
+- **MDSimulation objects**: New `dynamic_analysis` attribute available
+- **Analysis workflow**: `compute_dynamic_analysis()` method available in NetworkAnalyzer
+- **Output management**: Enhanced with dynamic analysis visualization methods
+
+### Performance Optimization Tips:
+```bash
+# For large systems or long trajectories
+md-compare single ... --dccm-selection "name CA" --pca-components 5
+
+# For speed-critical analysis
+md-compare single ... --no-dccm --no-pca
+
+# For detailed dynamics analysis
+md-compare single ... --pca-components 20 --dccm-selection "backbone"
+```
 
 ---
 

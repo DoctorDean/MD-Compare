@@ -46,7 +46,11 @@ def create_analysis_config_from_args(args) -> AnalysisConfig:
         segments=args.segments,
         preprocess=not args.no_preprocess,
         align_selection=args.align_selection,
-        center_selection=args.center_selection
+        center_selection=args.center_selection,
+        compute_dccm=args.compute_dccm,
+        compute_pca=args.compute_pca,
+        pca_components=args.pca_components,
+        dccm_selection=args.dccm_selection
     )
 
 
@@ -386,6 +390,18 @@ For more information, visit: https://github.com/yourusername/md-compare
                               help='Selection for structural alignment')
     single_parser.add_argument('--center-selection', default='protein',
                               help='Selection for centering')
+    single_parser.add_argument('--compute-dccm', action='store_true', default=True,
+                              help='Compute Dynamic Cross-Correlation Matrix (default: True)')
+    single_parser.add_argument('--no-dccm', dest='compute_dccm', action='store_false',
+                              help='Skip DCCM computation')
+    single_parser.add_argument('--compute-pca', action='store_true', default=True,
+                              help='Compute Principal Component Analysis (default: True)')
+    single_parser.add_argument('--no-pca', dest='compute_pca', action='store_false',
+                              help='Skip PCA computation')
+    single_parser.add_argument('--pca-components', type=int, default=10,
+                              help='Number of principal components to compute (default: 10)')
+    single_parser.add_argument('--dccm-selection', default='name CA',
+                              help='Atom selection for dynamic analysis (default: "name CA")')
     
     # Multiple simulation comparison
     compare_parser = subparsers.add_parser(
@@ -414,6 +430,18 @@ For more information, visit: https://github.com/yourusername/md-compare
                                help='Selection for structural alignment')
     compare_parser.add_argument('--center-selection', default='protein',
                                help='Selection for centering')
+    compare_parser.add_argument('--compute-dccm', action='store_true', default=True,
+                               help='Compute Dynamic Cross-Correlation Matrix (default: True)')
+    compare_parser.add_argument('--no-dccm', dest='compute_dccm', action='store_false',
+                               help='Skip DCCM computation')
+    compare_parser.add_argument('--compute-pca', action='store_true', default=True,
+                               help='Compute Principal Component Analysis (default: True)')
+    compare_parser.add_argument('--no-pca', dest='compute_pca', action='store_false',
+                               help='Skip PCA computation')
+    compare_parser.add_argument('--pca-components', type=int, default=10,
+                               help='Number of principal components to compute (default: 10)')
+    compare_parser.add_argument('--dccm-selection', default='name CA',
+                               help='Atom selection for dynamic analysis (default: "name CA")')
     
     # Differential analysis
     diff_parser = subparsers.add_parser(
@@ -456,6 +484,18 @@ For more information, visit: https://github.com/yourusername/md-compare
                             help='Selection for structural alignment')
     diff_parser.add_argument('--center-selection', default='protein',
                             help='Selection for centering')
+    diff_parser.add_argument('--compute-dccm', action='store_true', default=True,
+                            help='Compute Dynamic Cross-Correlation Matrix (default: True)')
+    diff_parser.add_argument('--no-dccm', dest='compute_dccm', action='store_false',
+                            help='Skip DCCM computation')
+    diff_parser.add_argument('--compute-pca', action='store_true', default=True,
+                            help='Compute Principal Component Analysis (default: True)')
+    diff_parser.add_argument('--no-pca', dest='compute_pca', action='store_false',
+                            help='Skip PCA computation')
+    diff_parser.add_argument('--pca-components', type=int, default=10,
+                            help='Number of principal components to compute (default: 10)')
+    diff_parser.add_argument('--dccm-selection', default='name CA',
+                            help='Atom selection for dynamic analysis (default: "name CA")')
     
     # Example configuration generator
     example_parser = subparsers.add_parser(

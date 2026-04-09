@@ -1,0 +1,312 @@
+# Example 1: Single HIV Protease Simulation Analysis
+
+This example demonstrates analyzing a single wild-type HIV protease MD simulation to understand its baseline network properties and dynamics.
+
+## Background
+
+We're analyzing a 100 ns molecular dynamics simulation of wild-type HIV protease in complex with the inhibitor darunavir. The system was prepared using CHARMM-GUI and simulated with GROMACS.
+
+**System Details:**
+- HIV protease dimer (99 residues per chain, chains A and B)
+- Darunavir inhibitor bound in the active site
+- Explicit water and ions
+- 100 ns production simulation (1000 frames saved)
+- Temperature: 310 K, Pressure: 1 bar
+
+## Files Required
+
+```
+data/
+├── hiv_wt_complex.pdb          # Topology file with HIV protease + inhibitor
+├── hiv_wt_trajectory.xtc       # 100 ns trajectory (1000 frames)
+└── README.md                   # System description
+```
+
+## Command Line Usage
+
+### Basic Analysis
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Baseline \
+  -o results/hiv_wt_analysis \
+  --cutoff 4.5 \
+  --threshold 0.2 \
+  --segments 5
+```
+
+### Advanced Analysis with Multiple Interaction Types
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Complete \
+  -o results/hiv_wt_complete \
+  --interaction-types distance hbond salt_bridge \
+  --cutoff 4.5 \
+  --threshold 0.15 \
+  --segments 10 \
+  --timeout 600
+```
+
+### Dynamic Analysis with DCCM and PCA
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Dynamics \
+  -o results/hiv_wt_dynamics \
+  --compute-dccm \
+  --compute-pca \
+  --pca-components 15 \
+  --dccm-selection "name CA" \
+  --cutoff 4.5 \
+  --threshold 0.2
+```
+
+### Analysis with Custom Selections
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Protein_Only \
+  -o results/hiv_wt_protein \
+  --selection "protein and not name H*" \
+  --align-selection "name CA and resid 10-90" \
+  --center-selection "protein" \
+  --dccm-selection "name CA and protein"
+```
+
+## Expected Results
+
+### Network Properties
+- **Nodes**: ~198 residues (99 per chain)
+- **Edges**: 800-1200 contacts (depending on threshold)
+- **Density**: 0.04-0.06 (typical for protein networks)
+- **Communities**: 4-6 communities (often corresponding to protein domains)
+
+### Dynamic Analysis Results
+- **DCCM**: Cross-correlation matrix showing residue motion coupling
+- **PCA**: First 3 components typically explain 60-80% of variance
+- **Motion Modes**: Collective motions including flap opening/closing
+- **Correlated Regions**: Active site-flap coupling, inter-chain communication
+
+### Key Insights Expected
+1. **Flap Dynamics**: High centrality for flap region residues (Ile50A, Ile50B)
+2. **Active Site Hub**: Asp25A and Asp25B as central catalytic residues
+3. **Inter-chain Communication**: Strong contacts across the dimer interface
+4. **Allosteric Networks**: Pathways connecting inhibitor binding site to flaps
+5. **Dynamic Coupling**: DCCM reveals correlated motions between flaps and active site
+6. **Principal Modes**: PCA identifies dominant conformational changes
+
+### Output Files Generated
+
+```
+results/hiv_wt_analysis/
+├── HIV_WT_Baseline_distance_contacts.npy        # Contact frequency matrix
+├── HIV_WT_Baseline_distance_contacts.csv        # Contact data (if <1M entries)
+├── HIV_WT_Baseline_centrality.csv              # Centrality measures per residue
+├── HIV_WT_Baseline_network.graphml             # Network for Cytoscape/Gephi
+├── HIV_WT_Baseline_system_info.txt             # System composition details
+├── HIV_WT_Baseline_dccm_matrix.npy             # Dynamic cross-correlation matrix
+├── HIV_WT_Baseline_dccm_matrix.csv             # DCCM data (if not too large)
+├── HIV_WT_Baseline_dccm_heatmap.png            # DCCM visualization
+├── HIV_WT_Baseline_pca_eigenvalues.npy         # PCA eigenvalues
+├── HIV_WT_Baseline_pca_eigenvectors.npy        # PCA eigenvectors
+├── HIV_WT_Baseline_pca_variance_explained.npy  # Variance explained by each PC
+├── HIV_WT_Baseline_principal_components.npy    # Trajectory projections
+├── HIV_WT_Baseline_pca_summary.txt             # PCA analysis summary
+├── HIV_WT_Baseline_pca_analysis.png            # PCA plots (scree, variance, etc.)
+├── HIV_WT_Baseline_dynamic_summary.txt         # Dynamic analysis overview
+├── analysis_config.json                        # Analysis parameters used
+└── workflow_summary.json                       # Complete analysis summary
+```
+
+## Interpreting Results
+
+### 1. System Information
+Check `HIV_WT_Baseline_system_info.txt`:
+```
+MD Simulation Analysis: HIV_WT_Baseline
+==================================================
+
+name: HIV_WT_Baseline
+n_chains: 2
+n_residues: 198
+n_atoms: 1536
+n_frames: 1000
+description: Single simulation analysis: HIV_WT_Baseline
+
+Chain Information:
+  Chain A:
+    Residues: 99
+    Range: 1-99
+    Atoms: 768
+
+  Chain B:
+    Residues: 99
+    Range: 1-99
+    Atoms: 768
+```
+
+### 2. Network Centrality Analysis
+Key residues to examine in `HIV_WT_Baseline_centrality.csv`:
+
+**High Betweenness Centrality** (communication hubs):
+- Asp25A, Asp25B (active site catalytic residues)
+- Ile50A, Ile50B (flap tips - conformational switches)
+- Gly48A, Gly48B (flap hinge regions)
+
+**High Degree Centrality** (highly connected):
+- Core hydrophobic residues
+- Interface residues between chains
+
+### 3. Contact Analysis
+Use the contact matrix to identify:
+- **Persistent contacts** (frequency > 0.8): Structural core
+- **Dynamic contacts** (frequency 0.2-0.8): Functional regions
+- **Inter-chain contacts**: Dimer stability
+
+### 4. Visualization Recommendations
+
+#### Cytoscape Network Analysis:
+1. Load `HIV_WT_Baseline_network.graphml` into Cytoscape
+2. Color nodes by betweenness centrality
+3. Size nodes by degree centrality
+4. Identify communities with clustering algorithms
+
+#### DCCM Analysis:
+1. Examine `HIV_WT_Baseline_dccm_heatmap.png` for correlated motions
+2. **Positive correlations (red)**: Residues moving in same direction
+3. **Negative correlations (blue)**: Residues moving in opposite directions
+4. **Strong anti-correlations**: Often indicate allosteric relationships
+
+#### PCA Analysis:
+1. Review `HIV_WT_Baseline_pca_analysis.png` for motion modes
+2. **First PC**: Usually represents the most dominant motion (flap opening/closing)
+3. **Eigenvalue spectrum**: Shows which modes are most important
+4. **Cumulative variance**: How many PCs needed to capture most motion
+
+#### PyMOL Structure Visualization:
+```python
+# PyMOL script for centrality visualization
+load hiv_wt_complex.pdb
+# Color by betweenness centrality (from CSV file)
+alter all, b=0  # Reset B-factors
+# Map centrality values to B-factors
+spectrum b, blue_white_red, minimum=0, maximum=1
+```
+
+### 5. Advanced Analysis Scripts
+
+#### DCCM Analysis Script:
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Load DCCM matrix
+dccm = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_dccm_matrix.npy')
+
+# Find strongest correlations
+strong_pos = np.where(dccm > 0.7)
+strong_neg = np.where(dccm < -0.7)
+
+print(f"Strong positive correlations: {len(strong_pos[0])}")
+print(f"Strong negative correlations: {len(strong_neg[0])}")
+
+# Plot correlation distribution
+plt.figure(figsize=(8, 6))
+plt.hist(dccm.flatten(), bins=50, alpha=0.7)
+plt.xlabel('Cross-Correlation')
+plt.ylabel('Frequency')
+plt.title('DCCM Value Distribution')
+plt.axvline(x=0, color='k', linestyle='--', alpha=0.5)
+plt.show()
+```
+
+#### PCA Analysis Script:
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Load PCA results
+eigenvals = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_pca_eigenvalues.npy')
+variance_exp = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_pca_variance_explained.npy')
+pc_proj = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_principal_components.npy')
+
+# Analyze the first few modes
+print("Principal Component Analysis Results:")
+print(f"PC1 explains {variance_exp[0]*100:.1f}% of variance")
+print(f"PC2 explains {variance_exp[1]*100:.1f}% of variance")
+print(f"PC3 explains {variance_exp[2]*100:.1f}% of variance")
+
+# Plot trajectory evolution in PC space
+plt.figure(figsize=(10, 4))
+plt.subplot(1, 2, 1)
+plt.plot(pc_proj[:, 0], label='PC1')
+plt.plot(pc_proj[:, 1], label='PC2')
+plt.xlabel('Frame')
+plt.ylabel('PC Projection')
+plt.title('Trajectory Evolution')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.scatter(pc_proj[:, 0], pc_proj[:, 1], alpha=0.6, c=range(len(pc_proj)))
+plt.xlabel(f'PC1 ({variance_exp[0]*100:.1f}%)')
+plt.ylabel(f'PC2 ({variance_exp[1]*100:.1f}%)')
+plt.title('PC1 vs PC2 Projection')
+plt.colorbar(label='Frame')
+plt.tight_layout()
+plt.show()
+```
+
+## Next Steps
+
+1. **Compare with mutants** using Example 2
+2. **Analyze different inhibitors** with the same system
+3. **Investigate specific pathways** using high centrality residues
+4. **Validate predictions** with experimental mutagenesis data
+
+## Troubleshooting
+
+### Common Issues:
+
+**Large network timeout:**
+```bash
+# Reduce network size with higher threshold
+md-compare single ... --threshold 0.3 --timeout 300
+```
+
+**Memory issues with dynamic analysis:**
+```bash
+# Disable DCCM/PCA for large systems
+md-compare single ... --no-dccm --no-pca
+
+# Or use fewer PCA components
+md-compare single ... --pca-components 5
+```
+
+**DCCM computation slow:**
+```bash
+# Use backbone atoms only
+md-compare single ... --dccm-selection "backbone"
+
+# Or CA atoms from specific region
+md-compare single ... --dccm-selection "name CA and resid 20-80"
+```
+
+**Chain detection problems:**
+```bash
+# Verify chain information in system_info.txt
+# Check if chains are named A,B vs 1,2 in topology
+```
+
+**PCA fails:**
+```bash
+# Ensure sufficient frames for stable PCA
+# Need at least 3x more frames than atoms for analysis
+# Check that trajectory has conformational variation
+```
+
+This baseline analysis establishes the foundation for understanding how mutations and different conditions affect the HIV protease network structure and dynamics.

@@ -29,7 +29,7 @@ plotly>=5.0.0          # Interactive plots
 ipywidgets>=7.6.0      # Jupyter widgets
 
 # For network visualization (optional)
-pygraphviz>=1.7        # Graph layout algorithms (requires graphviz system package)
+# pygraphviz>=1.7        # Graph layout algorithms (requires graphviz system package)
 
 # Memory profiling (development)
 memory-profiler>=0.60.0  # Monitor memory usage
