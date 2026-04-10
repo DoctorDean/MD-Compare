@@ -65,6 +65,37 @@ md-compare single \
   --threshold 0.2
 ```
 
+### Complete Analysis with Energy Landscape
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Complete \
+  -o results/hiv_wt_complete \
+  --compute-dccm \
+  --compute-pca \
+  --compute-landscape \
+  --pca-components 15 \
+  --landscape-bins 60 \
+  --landscape-temp 310 \
+  --landscape-sigma 1.2 \
+  --cutoff 4.5 \
+  --threshold 0.2
+```
+
+### High-Resolution Energy Landscape
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_HighRes \
+  -o results/hiv_wt_highres \
+  --landscape-bins 80 \
+  --landscape-temp 300 \
+  --landscape-sigma 0.8 \
+  --pca-components 20
+```
+
 ### Analysis with Custom Selections
 ```bash
 md-compare single \
@@ -91,6 +122,13 @@ md-compare single \
 - **PCA**: First 3 components typically explain 60-80% of variance
 - **Motion Modes**: Collective motions including flap opening/closing
 - **Correlated Regions**: Active site-flap coupling, inter-chain communication
+
+### Energy Landscape Results
+- **Free Energy Surface**: 2D landscape showing conformational stability
+- **Energy Minima**: Stable conformational states (typically 2-5 for HIV protease)
+- **Energy Barriers**: Transition barriers between states (5-20 kJ/mol typical)
+- **Conformational Routes**: Pathways between stable states
+- **Thermodynamic Profile**: Temperature-dependent conformational preferences
 
 ### Key Insights Expected
 1. **Flap Dynamics**: High centrality for flap region residues (Ile50A, Ile50B)
@@ -119,6 +157,15 @@ results/hiv_wt_analysis/
 ├── HIV_WT_Baseline_pca_summary.txt             # PCA analysis summary
 ├── HIV_WT_Baseline_pca_analysis.png            # PCA plots (scree, variance, etc.)
 ├── HIV_WT_Baseline_dynamic_summary.txt         # Dynamic analysis overview
+├── HIV_WT_Baseline_energy_landscape.npy        # Free energy surface matrix
+├── HIV_WT_Baseline_landscape_pc1_bins.npy      # PC1 bin edges
+├── HIV_WT_Baseline_landscape_pc2_bins.npy      # PC2 bin edges
+├── HIV_WT_Baseline_landscape_gradient_x.npy    # Energy gradients (forces)
+├── HIV_WT_Baseline_landscape_gradient_y.npy    # Energy gradients (forces)
+├── HIV_WT_Baseline_landscape_laplacian.npy     # Curvature matrix
+├── HIV_WT_Baseline_landscape_summary.txt       # Energy landscape summary
+├── HIV_WT_Baseline_energy_landscape.png        # Comprehensive landscape plots
+├── HIV_WT_Baseline_energy_landscape_detailed.png # High-resolution contour plot
 ├── analysis_config.json                        # Analysis parameters used
 └── workflow_summary.json                       # Complete analysis summary
 ```
@@ -187,6 +234,15 @@ Use the contact matrix to identify:
 2. **First PC**: Usually represents the most dominant motion (flap opening/closing)
 3. **Eigenvalue spectrum**: Shows which modes are most important
 4. **Cumulative variance**: How many PCs needed to capture most motion
+
+#### Energy Landscape Analysis:
+1. Examine `HIV_WT_Baseline_energy_landscape.png` for conformational states
+2. **Energy minima (red stars)**: Stable conformational states
+3. **Contour lines**: Isoenergy surfaces showing transition pathways
+4. **Color gradients**: Blue (low energy/stable) to yellow (high energy/unstable)
+5. **3D surface**: Overall shape of conformational landscape
+6. **Gradient vectors**: Forces driving conformational changes
+7. **Laplacian plot**: Curvature showing stability/instability regions
 
 #### PyMOL Structure Visualization:
 ```python
@@ -261,6 +317,73 @@ plt.tight_layout()
 plt.show()
 ```
 
+#### Energy Landscape Analysis Script:
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Load energy landscape data
+landscape = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_energy_landscape.npy')
+pc1_bins = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_landscape_pc1_bins.npy')
+pc2_bins = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_landscape_pc2_bins.npy')
+gradient_x = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_landscape_gradient_x.npy')
+gradient_y = np.load('results/hiv_wt_analysis/HIV_WT_Baseline_landscape_gradient_y.npy')
+
+# Analyze energy landscape
+print("Energy Landscape Analysis:")
+print(f"Energy range: {np.min(landscape):.1f} to {np.max(landscape):.1f} kJ/mol")
+print(f"Energy span: {np.max(landscape) - np.min(landscape):.1f} kJ/mol")
+
+# Find energy minima
+min_indices = np.unravel_index(landscape.argmin(), landscape.shape)
+min_energy = landscape[min_indices]
+print(f"Global minimum: {min_energy:.1f} kJ/mol")
+
+# Analyze gradient magnitude (forces)
+gradient_mag = np.sqrt(gradient_x**2 + gradient_y**2)
+print(f"Maximum force: {np.max(gradient_mag):.2f} kJ/mol/unit")
+
+# Custom landscape analysis
+plt.figure(figsize=(15, 5))
+
+plt.subplot(1, 3, 1)
+pc1_centers = (pc1_bins[:-1] + pc1_bins[1:]) / 2
+pc2_centers = (pc2_bins[:-1] + pc2_bins[1:]) / 2
+PC1, PC2 = np.meshgrid(pc1_centers, pc2_centers)
+contour = plt.contourf(PC1, PC2, landscape, levels=20, cmap='viridis')
+plt.colorbar(contour, label='Energy (kJ/mol)')
+plt.xlabel('PC1')
+plt.ylabel('PC2')
+plt.title('Energy Landscape')
+
+plt.subplot(1, 3, 2)
+plt.imshow(gradient_mag, extent=[pc1_bins[0], pc1_bins[-1], pc2_bins[0], pc2_bins[-1]], 
+           origin='lower', cmap='plasma')
+plt.colorbar(label='|∇G| (kJ/mol/unit)')
+plt.xlabel('PC1')
+plt.ylabel('PC2')  
+plt.title('Force Field Magnitude')
+
+plt.subplot(1, 3, 3)
+# Energy profile along PC1 (averaging over PC2)
+pc1_profile = np.mean(landscape, axis=0)
+plt.plot(pc1_centers, pc1_profile, 'b-', linewidth=2)
+plt.xlabel('PC1 Projection')
+plt.ylabel('Average Energy (kJ/mol)')
+plt.title('PC1 Energy Profile')
+plt.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+# Identify conformational states
+low_energy_threshold = np.min(landscape) + 5.0  # Within 5 kJ/mol of minimum
+stable_regions = landscape < low_energy_threshold
+n_stable_points = np.sum(stable_regions)
+print(f"Stable conformations (within 5 kJ/mol): {n_stable_points} points")
+print(f"Percentage of conformational space: {n_stable_points/landscape.size*100:.1f}%")
+```
+
 ## Next Steps
 
 1. **Compare with mutants** using Example 2
@@ -307,6 +430,30 @@ md-compare single ... --dccm-selection "name CA and resid 20-80"
 # Ensure sufficient frames for stable PCA
 # Need at least 3x more frames than atoms for analysis
 # Check that trajectory has conformational variation
+```
+
+**Energy landscape computation slow:**
+```bash
+# Reduce resolution for faster computation
+md-compare single ... --landscape-bins 30
+
+# Skip smoothing
+md-compare single ... --landscape-sigma 0
+
+# Disable landscape for speed
+md-compare single ... --no-landscape
+```
+
+**Energy landscape shows artifacts:**
+```bash
+# Increase smoothing
+md-compare single ... --landscape-sigma 2.0
+
+# More bins for better resolution
+md-compare single ... --landscape-bins 70
+
+# Check temperature setting
+md-compare single ... --landscape-temp 310
 ```
 
 This baseline analysis establishes the foundation for understanding how mutations and different conditions affect the HIV protease network structure and dynamics.

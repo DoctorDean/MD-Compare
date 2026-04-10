@@ -197,3 +197,4 @@ examples/data/*.dcd
 examples/data/*.trr
 !examples/data/test_*.xtc
 !examples/data/small_*.dcd
+/data
