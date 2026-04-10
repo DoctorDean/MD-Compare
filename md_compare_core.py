@@ -34,6 +34,8 @@ except ImportError:
 try:
     from scipy.spatial.distance import pdist, squareform
     from scipy.stats import pearsonr
+    from scipy.linalg import svd
+    from scipy.ndimage import gaussian_filter
     import matplotlib.pyplot as plt
     import seaborn as sns
 except ImportError:
@@ -69,6 +71,17 @@ class AnalysisConfig:
     preprocess: bool = True
     align_selection: str = "name CA"
     center_selection: str = "protein"
+    # Dynamic analysis options
+    compute_dccm: bool = True
+    compute_pca: bool = True
+    pca_components: int = 10
+    dccm_selection: str = "name CA"
+    # Energy landscape analysis options
+    compute_energy_landscape: bool = True
+    landscape_temperature: float = 310.0  # Kelvin
+    landscape_bins: int = 50
+    landscape_sigma: float = 1.0  # Gaussian smoothing
+    landscape_epsilon: float = 1e-10  # Zero bin handling
     
     def __post_init__(self):
         if self.cutoffs is None:
@@ -92,6 +105,21 @@ class NetworkMetrics:
     eigenvector_centrality: Dict[str, float] = None
     degree_centrality: Dict[str, float] = None
     network: nx.Graph = None
+    # Dynamic analysis fields
+    dccm_matrix: Optional[np.ndarray] = None
+    pca_eigenvalues: Optional[np.ndarray] = None
+    pca_eigenvectors: Optional[np.ndarray] = None
+    pca_variance_explained: Optional[np.ndarray] = None
+    principal_components: Optional[np.ndarray] = None
+    # Energy landscape fields
+    energy_landscape: Optional[np.ndarray] = None
+    landscape_pc1_bins: Optional[np.ndarray] = None
+    landscape_pc2_bins: Optional[np.ndarray] = None
+    landscape_gradient_x: Optional[np.ndarray] = None
+    landscape_gradient_y: Optional[np.ndarray] = None
+    landscape_laplacian: Optional[np.ndarray] = None
+    landscape_minima: Optional[List[Tuple[float, float, float]]] = None
+    landscape_barriers: Optional[List[Dict[str, Any]]] = None
     
     def __post_init__(self):
         if self.communities is None:
@@ -347,7 +375,7 @@ class NetworkAnalyzer:
     
     def _setup_preprocessing(self, simulation: MDSimulation):
         """Setup MD preprocessing for the simulation"""
-        from .preprocessing import MDPreprocessor
+        from utils import MDPreprocessor
         
         self._preprocessor = MDPreprocessor(
             simulation.universe,
@@ -447,6 +475,449 @@ class NetworkAnalyzer:
         print(f"Network analysis complete: {metrics.n_nodes} nodes, {metrics.n_edges} edges")
         return metrics
     
+    def compute_dynamic_analysis(self, simulation: MDSimulation) -> Dict[str, Any]:
+        """
+        Compute dynamic cross-correlation matrix (DCCM) and principal component analysis (PCA)
+        
+        Parameters:
+        -----------
+        simulation : MDSimulation
+            The simulation to analyze
+            
+        Returns:
+        --------
+        Dict : Dynamic analysis results including DCCM and PCA
+        """
+        dynamic_results = {}
+        
+        if not self.config.compute_dccm and not self.config.compute_pca:
+            return dynamic_results
+            
+        print("Computing dynamic analysis (DCCM and PCA)...")
+        
+        # Get atoms for analysis (typically CA atoms)
+        atoms = simulation.universe.select_atoms(self.config.dccm_selection)
+        
+        if len(atoms) == 0:
+            print(f"Warning: No atoms selected with '{self.config.dccm_selection}'")
+            return dynamic_results
+            
+        print(f"Dynamic analysis on {len(atoms)} atoms")
+        
+        # Collect coordinates across trajectory
+        coordinates = []
+        n_frames = len(simulation.universe.trajectory)
+        
+        print("Collecting coordinates...")
+        for i, ts in enumerate(simulation.universe.trajectory):
+            if i % 100 == 0:
+                print(f"  Frame {i}/{n_frames} ({100*i/n_frames:.1f}%)")
+                
+            # Apply preprocessing if enabled
+            if self.config.preprocess and self._preprocessor:
+                self._preprocessor.center_system()
+                self._preprocessor.align_to_reference()
+                
+            coordinates.append(atoms.positions.copy())
+        
+        coordinates = np.array(coordinates)  # Shape: (n_frames, n_atoms, 3)
+        
+        # Compute DCCM
+        if self.config.compute_dccm:
+            print("Computing DCCM...")
+            dccm_matrix = self._compute_dccm(coordinates)
+            dynamic_results['dccm_matrix'] = dccm_matrix
+            dynamic_results['dccm_atoms'] = len(atoms)
+            
+        # Compute PCA
+        if self.config.compute_pca:
+            print("Computing PCA...")
+            pca_results = self._compute_pca(coordinates, self.config.pca_components)
+            dynamic_results.update(pca_results)
+            
+            # Compute energy landscape from PC projections
+            if self.config.compute_energy_landscape and 'principal_components' in pca_results:
+                print("Computing energy landscape...")
+                landscape_results = self._compute_energy_landscape(pca_results['principal_components'])
+                dynamic_results.update(landscape_results)
+            
+        print("Dynamic analysis completed!")
+        return dynamic_results
+    
+    def _compute_dccm(self, coordinates: np.ndarray) -> np.ndarray:
+        """
+        Compute Dynamic Cross-Correlation Matrix
+        
+        Parameters:
+        -----------
+        coordinates : np.ndarray
+            Coordinates array (n_frames, n_atoms, 3)
+            
+        Returns:
+        --------
+        np.ndarray : DCCM matrix (n_atoms, n_atoms)
+        """
+        n_frames, n_atoms, _ = coordinates.shape
+        
+        # Calculate displacement vectors (coordinates - average)
+        avg_coords = np.mean(coordinates, axis=0)
+        displacements = coordinates - avg_coords[np.newaxis, :, :]
+        
+        # Initialize DCCM matrix
+        dccm = np.zeros((n_atoms, n_atoms))
+        
+        # Compute cross-correlations
+        for i in range(n_atoms):
+            for j in range(i, n_atoms):
+                # Displacement vectors for atoms i and j
+                disp_i = displacements[:, i, :]  # Shape: (n_frames, 3)
+                disp_j = displacements[:, j, :]  # Shape: (n_frames, 3)
+                
+                # Compute cross-correlation
+                numerator = np.mean(np.sum(disp_i * disp_j, axis=1))
+                
+                # Compute normalization factors
+                variance_i = np.mean(np.sum(disp_i**2, axis=1))
+                variance_j = np.mean(np.sum(disp_j**2, axis=1))
+                
+                if variance_i > 0 and variance_j > 0:
+                    correlation = numerator / np.sqrt(variance_i * variance_j)
+                else:
+                    correlation = 0.0
+                    
+                dccm[i, j] = correlation
+                dccm[j, i] = correlation  # Symmetric matrix
+                
+        return dccm
+    
+    def _compute_pca(self, coordinates: np.ndarray, n_components: int) -> Dict[str, Any]:
+        """
+        Compute Principal Component Analysis
+        
+        Parameters:
+        -----------
+        coordinates : np.ndarray
+            Coordinates array (n_frames, n_atoms, 3)
+        n_components : int
+            Number of principal components to compute
+            
+        Returns:
+        --------
+        Dict : PCA results including eigenvalues, eigenvectors, and variance explained
+        """
+        n_frames, n_atoms, _ = coordinates.shape
+        
+        # Reshape coordinates to (n_frames, n_atoms*3)
+        coords_flat = coordinates.reshape(n_frames, -1)
+        
+        # Center the data
+        mean_coords = np.mean(coords_flat, axis=0)
+        centered_coords = coords_flat - mean_coords
+        
+        # Compute covariance matrix
+        cov_matrix = np.cov(centered_coords.T)
+        
+        # Perform SVD
+        try:
+            eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+            
+            # Sort by eigenvalue magnitude (descending)
+            idx = np.argsort(eigenvalues)[::-1]
+            eigenvalues = eigenvalues[idx]
+            eigenvectors = eigenvectors[:, idx]
+            
+            # Take only requested number of components
+            n_components = min(n_components, len(eigenvalues))
+            eigenvalues = eigenvalues[:n_components]
+            eigenvectors = eigenvectors[:, :n_components]
+            
+            # Compute variance explained
+            total_variance = np.sum(eigenvalues)
+            variance_explained = eigenvalues / total_variance if total_variance > 0 else np.zeros_like(eigenvalues)
+            cumulative_variance = np.cumsum(variance_explained)
+            
+            # Project data onto principal components
+            principal_components = np.dot(centered_coords, eigenvectors)
+            
+            pca_results = {
+                'pca_eigenvalues': eigenvalues,
+                'pca_eigenvectors': eigenvectors,
+                'pca_variance_explained': variance_explained,
+                'pca_cumulative_variance': cumulative_variance,
+                'principal_components': principal_components,
+                'pca_n_components': n_components,
+                'pca_total_variance': total_variance
+            }
+            
+            print(f"PCA: {n_components} components explain {cumulative_variance[-1]*100:.1f}% of variance")
+            
+        except Exception as e:
+            print(f"PCA computation failed: {e}")
+            pca_results = {
+                'pca_eigenvalues': None,
+                'pca_eigenvectors': None,
+                'pca_variance_explained': None,
+                'principal_components': None
+            }
+            
+        return pca_results
+    
+    def _compute_energy_landscape(self, principal_components: np.ndarray) -> Dict[str, Any]:
+        """
+        Compute free energy landscape from PC1 and PC2 projections
+        
+        Uses the Boltzmann relation: G = -kB*T*ln(P) where P is probability density
+        
+        Parameters:
+        -----------
+        principal_components : np.ndarray
+            PC projections (n_frames, n_components)
+            
+        Returns:
+        --------
+        Dict : Energy landscape analysis results
+        """
+        if principal_components.shape[1] < 2:
+            print("Warning: Need at least 2 PCs for energy landscape analysis")
+            return {}
+            
+        try:
+            # Extract PC1 and PC2
+            pc1 = principal_components[:, 0]
+            pc2 = principal_components[:, 1]
+            
+            # Physical constants
+            kB = 8.314462618e-3  # kJ/(mol·K) - Boltzmann constant
+            T = self.config.landscape_temperature  # Temperature in Kelvin
+            epsilon = self.config.landscape_epsilon
+            
+            # Create bins for histogram
+            n_bins = self.config.landscape_bins
+            pc1_bins = np.linspace(np.min(pc1), np.max(pc1), n_bins)
+            pc2_bins = np.linspace(np.min(pc2), np.max(pc2), n_bins)
+            
+            print(f"Creating {n_bins}x{n_bins} energy landscape")
+            print(f"PC1 range: {np.min(pc1):.2f} to {np.max(pc1):.2f}")
+            print(f"PC2 range: {np.min(pc2):.2f} to {np.max(pc2):.2f}")
+            
+            # Compute 2D histogram
+            H, pc1_edges, pc2_edges = np.histogram2d(pc1, pc2, bins=[pc1_bins, pc2_bins])
+            H = H.T  # Transpose for correct orientation
+            
+            # Convert to probability density
+            P = H / np.sum(H)
+            
+            # Handle zero bins (add small epsilon)
+            P[P == 0] = epsilon
+            
+            # Compute free energy using Boltzmann relation
+            G = -kB * T * np.log(P)
+            
+            # Set minimum energy to zero (relative energies)
+            G -= np.min(G)
+            
+            # Apply Gaussian smoothing
+            if self.config.landscape_sigma > 0:
+                G = gaussian_filter(G, sigma=self.config.landscape_sigma)
+                # Re-normalize after smoothing
+                G -= np.min(G)
+            
+            print(f"Energy landscape: {np.min(G):.1f} to {np.max(G):.1f} kJ/mol")
+            
+            # Compute gradients (forces)
+            gradient_y, gradient_x = np.gradient(G)
+            
+            # Compute Laplacian (curvature)
+            laplacian = self._compute_laplacian(G)
+            
+            # Find local minima and barriers
+            minima = self._find_energy_minima(G, pc1_edges, pc2_edges)
+            barriers = self._analyze_energy_barriers(G, minima, pc1_edges, pc2_edges)
+            
+            landscape_results = {
+                'energy_landscape': G,
+                'landscape_pc1_bins': pc1_edges,
+                'landscape_pc2_bins': pc2_edges,
+                'landscape_gradient_x': gradient_x,
+                'landscape_gradient_y': gradient_y,
+                'landscape_laplacian': laplacian,
+                'landscape_minima': minima,
+                'landscape_barriers': barriers,
+                'landscape_temperature': T,
+                'landscape_energy_range': [np.min(G), np.max(G)],
+                'landscape_total_frames': len(pc1)
+            }
+            
+            print(f"Found {len(minima)} energy minima")
+            if barriers:
+                print(f"Identified {len(barriers)} energy barriers")
+            
+            return landscape_results
+            
+        except Exception as e:
+            print(f"Energy landscape computation failed: {e}")
+            return {}
+    
+    def _compute_laplacian(self, energy_surface: np.ndarray) -> np.ndarray:
+        """
+        Compute Laplacian (second derivative) of energy surface
+        
+        Parameters:
+        -----------
+        energy_surface : np.ndarray
+            2D energy landscape
+            
+        Returns:
+        --------
+        np.ndarray : Laplacian matrix
+        """
+        # Compute second derivatives using finite differences
+        # Laplacian = d²G/dx² + d²G/dy²
+        
+        # Second derivative in x direction
+        d2dx2 = np.zeros_like(energy_surface)
+        d2dx2[:, 1:-1] = energy_surface[:, :-2] - 2*energy_surface[:, 1:-1] + energy_surface[:, 2:]
+        
+        # Second derivative in y direction  
+        d2dy2 = np.zeros_like(energy_surface)
+        d2dy2[1:-1, :] = energy_surface[:-2, :] - 2*energy_surface[1:-1, :] + energy_surface[2:, :]
+        
+        laplacian = d2dx2 + d2dy2
+        return laplacian
+    
+    def _find_energy_minima(self, energy_surface: np.ndarray, 
+                           pc1_edges: np.ndarray, pc2_edges: np.ndarray,
+                           min_separation: int = 3) -> List[Tuple[float, float, float]]:
+        """
+        Find local energy minima in the landscape
+        
+        Parameters:
+        -----------
+        energy_surface : np.ndarray
+            2D energy landscape
+        pc1_edges : np.ndarray
+            PC1 bin edges
+        pc2_edges : np.ndarray
+            PC2 bin edges
+        min_separation : int
+            Minimum separation between minima (in bins)
+            
+        Returns:
+        --------
+        List[Tuple] : List of minima (pc1, pc2, energy)
+        """
+        from scipy.ndimage import minimum_filter
+        
+        # Find local minima using minimum filter
+        local_min_mask = (energy_surface == minimum_filter(energy_surface, size=min_separation))
+        
+        # Get coordinates of minima
+        min_coords = np.where(local_min_mask)
+        
+        minima = []
+        for i, j in zip(min_coords[0], min_coords[1]):
+            # Convert bin indices to PC coordinates
+            pc1_coord = (pc1_edges[j] + pc1_edges[j+1]) / 2 if j < len(pc1_edges)-1 else pc1_edges[j]
+            pc2_coord = (pc2_edges[i] + pc2_edges[i+1]) / 2 if i < len(pc2_edges)-1 else pc2_edges[i]
+            energy = energy_surface[i, j]
+            
+            minima.append((pc1_coord, pc2_coord, energy))
+        
+        # Sort by energy (lowest first)
+        minima.sort(key=lambda x: x[2])
+        
+        # Filter out minima that are too close to each other
+        filtered_minima = []
+        for minimum in minima:
+            pc1_min, pc2_min, energy_min = minimum
+            
+            # Check if this minimum is far enough from existing ones
+            too_close = False
+            for existing_min in filtered_minima:
+                pc1_exist, pc2_exist, _ = existing_min
+                distance = np.sqrt((pc1_min - pc1_exist)**2 + (pc2_min - pc2_exist)**2)
+                
+                # Convert to bin units for comparison
+                pc1_bin_size = (pc1_edges[-1] - pc1_edges[0]) / len(pc1_edges)
+                pc2_bin_size = (pc2_edges[-1] - pc2_edges[0]) / len(pc2_edges)
+                distance_bins = distance / np.sqrt(pc1_bin_size**2 + pc2_bin_size**2)
+                
+                if distance_bins < min_separation:
+                    too_close = True
+                    break
+            
+            if not too_close:
+                filtered_minima.append(minimum)
+        
+        return filtered_minima[:10]  # Return top 10 minima
+    
+    def _analyze_energy_barriers(self, energy_surface: np.ndarray, 
+                               minima: List[Tuple[float, float, float]],
+                               pc1_edges: np.ndarray, pc2_edges: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Analyze energy barriers between minima
+        
+        Parameters:
+        -----------
+        energy_surface : np.ndarray
+            2D energy landscape
+        minima : List[Tuple]
+            List of energy minima
+        pc1_edges : np.ndarray
+            PC1 bin edges  
+        pc2_edges : np.ndarray
+            PC2 bin edges
+            
+        Returns:
+        --------
+        List[Dict] : Energy barrier information
+        """
+        if len(minima) < 2:
+            return []
+        
+        barriers = []
+        
+        # Analyze barriers between the lowest energy minima
+        for i in range(min(len(minima), 5)):  # Top 5 minima
+            for j in range(i+1, min(len(minima), 5)):
+                min1 = minima[i]
+                min2 = minima[j]
+                
+                # Find approximate barrier height
+                pc1_path = np.linspace(min1[0], min2[0], 100)
+                pc2_path = np.linspace(min1[1], min2[1], 100)
+                
+                # Convert to bin indices
+                pc1_bin_size = (pc1_edges[-1] - pc1_edges[0]) / (len(pc1_edges) - 1)
+                pc2_bin_size = (pc2_edges[-1] - pc2_edges[0]) / (len(pc2_edges) - 1)
+                
+                path_energies = []
+                for pc1_val, pc2_val in zip(pc1_path, pc2_path):
+                    # Find closest bin
+                    i_bin = int((pc2_val - pc2_edges[0]) / pc2_bin_size)
+                    j_bin = int((pc1_val - pc1_edges[0]) / pc1_bin_size)
+                    
+                    # Ensure within bounds
+                    i_bin = max(0, min(i_bin, energy_surface.shape[0]-1))
+                    j_bin = max(0, min(j_bin, energy_surface.shape[1]-1))
+                    
+                    path_energies.append(energy_surface[i_bin, j_bin])
+                
+                if path_energies:
+                    barrier_height = max(path_energies) - min(min1[2], min2[2])
+                    
+                    barriers.append({
+                        'minimum_1': min1,
+                        'minimum_2': min2,
+                        'barrier_height': barrier_height,
+                        'min_energy_diff': abs(min1[2] - min2[2])
+                    })
+        
+        # Sort by barrier height
+        barriers.sort(key=lambda x: x['barrier_height'])
+        
+        return barriers
+    
     def _build_network(self, simulation: MDSimulation, contact_matrix: np.ndarray) -> nx.Graph:
         """Build NetworkX graph from contact matrix"""
         G = nx.Graph()
@@ -471,7 +942,7 @@ class NetworkAnalyzer:
     
     def _compute_centrality_measures(self, G: nx.Graph, metrics: NetworkMetrics) -> NetworkMetrics:
         """Compute centrality measures with timeout protection"""
-        from .utils import timeout_handler
+        from utils import timeout_handler
         
         try:
             with timeout_handler(self.config.timeout_seconds):
@@ -884,6 +1355,10 @@ class OutputManager:
         if simulation.network_metrics:
             self._save_centrality_data(simulation, prefix)
         
+        # Save dynamic analysis results
+        if hasattr(simulation, 'dynamic_analysis') and simulation.dynamic_analysis:
+            self._save_dynamic_analysis_data(simulation, prefix)
+        
         # Save system info
         self._save_system_info(simulation, prefix)
     
@@ -943,6 +1418,366 @@ class OutputManager:
                 f.write(f"    Residues: {info['n_residues']}\n")
                 f.write(f"    Range: {info['residue_range'][0]}-{info['residue_range'][1]}\n")
                 f.write(f"    Atoms: {info['atom_count']}\n\n")
+    
+    def _save_dynamic_analysis_data(self, simulation: MDSimulation, prefix: str):
+        """Save dynamic analysis results (DCCM and PCA)"""
+        if not hasattr(simulation, 'dynamic_analysis') or not simulation.dynamic_analysis:
+            return
+            
+        dynamic_data = simulation.dynamic_analysis
+        
+        # Save DCCM matrix
+        if 'dccm_matrix' in dynamic_data and dynamic_data['dccm_matrix'] is not None:
+            np.save(self.output_dir / f"{prefix}_dccm_matrix.npy", dynamic_data['dccm_matrix'])
+            
+            # Save as CSV if not too large
+            if dynamic_data['dccm_matrix'].size < 1000000:
+                np.savetxt(
+                    self.output_dir / f"{prefix}_dccm_matrix.csv",
+                    dynamic_data['dccm_matrix'],
+                    delimiter=",",
+                    fmt="%.6f",
+                    comments=""
+                )
+            
+            # Create DCCM visualization
+            self._create_dccm_visualization(dynamic_data['dccm_matrix'], prefix)
+        
+        # Save PCA results
+        if 'pca_eigenvalues' in dynamic_data and dynamic_data['pca_eigenvalues'] is not None:
+            np.save(self.output_dir / f"{prefix}_pca_eigenvalues.npy", dynamic_data['pca_eigenvalues'])
+            np.save(self.output_dir / f"{prefix}_pca_eigenvectors.npy", dynamic_data['pca_eigenvectors'])
+            np.save(self.output_dir / f"{prefix}_pca_variance_explained.npy", dynamic_data['pca_variance_explained'])
+            
+            if 'principal_components' in dynamic_data and dynamic_data['principal_components'] is not None:
+                np.save(self.output_dir / f"{prefix}_principal_components.npy", dynamic_data['principal_components'])
+            
+            # Save PCA summary
+            with open(self.output_dir / f"{prefix}_pca_summary.txt", 'w') as f:
+                f.write("Principal Component Analysis Summary\n")
+                f.write("=" * 40 + "\n")
+                f.write(f"Number of components: {dynamic_data.get('pca_n_components', 'N/A')}\n")
+                f.write(f"Total variance: {dynamic_data.get('pca_total_variance', 'N/A'):.6f}\n")
+                
+                if 'pca_cumulative_variance' in dynamic_data:
+                    f.write(f"Variance explained by first 5 PCs:\n")
+                    for i, var_exp in enumerate(dynamic_data['pca_variance_explained'][:5]):
+                        f.write(f"  PC{i+1}: {var_exp*100:.2f}%\n")
+                    
+                    f.write(f"\nCumulative variance explained:\n")
+                    for i, cum_var in enumerate(dynamic_data['pca_cumulative_variance'][:5]):
+                        f.write(f"  PC1-{i+1}: {cum_var*100:.2f}%\n")
+            
+            # Create PCA visualization
+            self._create_pca_visualization(dynamic_data, prefix)
+        
+        # Save energy landscape results
+        if 'energy_landscape' in dynamic_data and dynamic_data['energy_landscape'] is not None:
+            # Save landscape data
+            np.save(self.output_dir / f"{prefix}_energy_landscape.npy", dynamic_data['energy_landscape'])
+            np.save(self.output_dir / f"{prefix}_landscape_pc1_bins.npy", dynamic_data['landscape_pc1_bins'])
+            np.save(self.output_dir / f"{prefix}_landscape_pc2_bins.npy", dynamic_data['landscape_pc2_bins'])
+            np.save(self.output_dir / f"{prefix}_landscape_gradient_x.npy", dynamic_data['landscape_gradient_x'])
+            np.save(self.output_dir / f"{prefix}_landscape_gradient_y.npy", dynamic_data['landscape_gradient_y'])
+            np.save(self.output_dir / f"{prefix}_landscape_laplacian.npy", dynamic_data['landscape_laplacian'])
+            
+            # Save landscape summary
+            with open(self.output_dir / f"{prefix}_landscape_summary.txt", 'w') as f:
+                f.write("Energy Landscape Analysis Summary\n")
+                f.write("=" * 40 + "\n")
+                f.write(f"Temperature: {dynamic_data.get('landscape_temperature', 'N/A')} K\n")
+                f.write(f"Total frames analyzed: {dynamic_data.get('landscape_total_frames', 'N/A')}\n")
+                
+                energy_range = dynamic_data.get('landscape_energy_range', [0, 0])
+                f.write(f"Energy range: {energy_range[0]:.1f} to {energy_range[1]:.1f} kJ/mol\n")
+                
+                # Minima information
+                minima = dynamic_data.get('landscape_minima', [])
+                f.write(f"\nNumber of energy minima found: {len(minima)}\n")
+                if minima:
+                    f.write("Top 5 energy minima (PC1, PC2, Energy):\n")
+                    for i, (pc1, pc2, energy) in enumerate(minima[:5]):
+                        f.write(f"  {i+1}: PC1={pc1:.3f}, PC2={pc2:.3f}, E={energy:.1f} kJ/mol\n")
+                
+                # Barrier information
+                barriers = dynamic_data.get('landscape_barriers', [])
+                f.write(f"\nNumber of energy barriers analyzed: {len(barriers)}\n")
+                if barriers:
+                    f.write("Top 3 energy barriers:\n")
+                    for i, barrier in enumerate(barriers[:3]):
+                        height = barrier['barrier_height']
+                        f.write(f"  {i+1}: Barrier height = {height:.1f} kJ/mol\n")
+            
+            # Create landscape visualizations
+            self._create_landscape_visualization(dynamic_data, prefix)
+        
+        # Save dynamic analysis summary
+        with open(self.output_dir / f"{prefix}_dynamic_summary.txt", 'w') as f:
+            f.write("Dynamic Analysis Summary\n")
+            f.write("=" * 30 + "\n")
+            
+            if 'dccm_matrix' in dynamic_data:
+                dccm = dynamic_data['dccm_matrix']
+                f.write(f"DCCM computed: Yes\n")
+                f.write(f"DCCM atoms: {dynamic_data.get('dccm_atoms', 'N/A')}\n")
+                f.write(f"DCCM matrix size: {dccm.shape}\n")
+                f.write(f"DCCM range: {np.min(dccm):.3f} to {np.max(dccm):.3f}\n")
+                f.write(f"Average correlation: {np.mean(dccm):.3f}\n")
+            else:
+                f.write(f"DCCM computed: No\n")
+            
+            if 'pca_eigenvalues' in dynamic_data:
+                f.write(f"PCA computed: Yes\n")
+                f.write(f"PCA components: {dynamic_data.get('pca_n_components', 'N/A')}\n")
+                if 'pca_cumulative_variance' in dynamic_data and len(dynamic_data['pca_cumulative_variance']) > 0:
+                    f.write(f"First PC explains: {dynamic_data['pca_variance_explained'][0]*100:.1f}% variance\n")
+                    f.write(f"First 3 PCs explain: {dynamic_data['pca_cumulative_variance'][2]*100:.1f}% variance\n")
+            else:
+                f.write(f"PCA computed: No\n")
+                
+            if 'energy_landscape' in dynamic_data:
+                f.write(f"Energy landscape computed: Yes\n")
+                energy_range = dynamic_data.get('landscape_energy_range', [0, 0])
+                f.write(f"Energy range: {energy_range[1] - energy_range[0]:.1f} kJ/mol\n")
+                minima_count = len(dynamic_data.get('landscape_minima', []))
+                f.write(f"Energy minima found: {minima_count}\n")
+            else:
+                f.write(f"Energy landscape computed: No\n")
+    
+    def _create_dccm_visualization(self, dccm_matrix: np.ndarray, prefix: str):
+        """Create DCCM heatmap visualization"""
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            
+            plt.figure(figsize=(10, 8))
+            
+            # Create heatmap with diverging colormap
+            sns.heatmap(dccm_matrix, 
+                       cmap='RdBu_r', 
+                       center=0,
+                       vmin=-1, vmax=1,
+                       square=True,
+                       cbar_kws={'label': 'Cross-Correlation'})
+            
+            plt.title('Dynamic Cross-Correlation Matrix (DCCM)')
+            plt.xlabel('Residue Index')
+            plt.ylabel('Residue Index')
+            plt.tight_layout()
+            
+            # Save plot
+            plt.savefig(self.output_dir / f"{prefix}_dccm_heatmap.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            
+        except Exception as e:
+            print(f"Warning: Could not create DCCM visualization: {e}")
+    
+    def _create_pca_visualization(self, pca_data: Dict[str, Any], prefix: str):
+        """Create PCA analysis visualization"""
+        try:
+            import matplotlib.pyplot as plt
+            
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+            
+            # Plot 1: Eigenvalue spectrum (scree plot)
+            eigenvals = pca_data['pca_eigenvalues']
+            ax1.plot(range(1, len(eigenvals) + 1), eigenvals, 'bo-')
+            ax1.set_xlabel('Principal Component')
+            ax1.set_ylabel('Eigenvalue')
+            ax1.set_title('PCA Eigenvalue Spectrum')
+            ax1.grid(True, alpha=0.3)
+            
+            # Plot 2: Variance explained
+            var_explained = pca_data['pca_variance_explained'] * 100
+            ax2.bar(range(1, len(var_explained) + 1), var_explained)
+            ax2.set_xlabel('Principal Component')
+            ax2.set_ylabel('Variance Explained (%)')
+            ax2.set_title('Variance Explained by Each PC')
+            ax2.grid(True, alpha=0.3)
+            
+            # Plot 3: Cumulative variance explained
+            cum_var = pca_data['pca_cumulative_variance'] * 100
+            ax3.plot(range(1, len(cum_var) + 1), cum_var, 'ro-')
+            ax3.axhline(y=80, color='k', linestyle='--', alpha=0.5, label='80%')
+            ax3.set_xlabel('Principal Component')
+            ax3.set_ylabel('Cumulative Variance Explained (%)')
+            ax3.set_title('Cumulative Variance Explained')
+            ax3.legend()
+            ax3.grid(True, alpha=0.3)
+            
+            # Plot 4: PC1 vs PC2 trajectory projection
+            if 'principal_components' in pca_data and pca_data['principal_components'] is not None:
+                pc_proj = pca_data['principal_components']
+                if pc_proj.shape[1] >= 2:
+                    scatter = ax4.scatter(pc_proj[:, 0], pc_proj[:, 1], 
+                                        c=range(len(pc_proj[:, 0])), cmap='viridis', alpha=0.6)
+                    ax4.set_xlabel(f'PC1 ({var_explained[0]:.1f}%)')
+                    ax4.set_ylabel(f'PC2 ({var_explained[1]:.1f}%)')
+                    ax4.set_title('Trajectory Projection on PC1-PC2')
+                    plt.colorbar(scatter, ax=ax4, label='Frame')
+                else:
+                    ax4.text(0.5, 0.5, 'Insufficient PCs\nfor projection plot', 
+                           ha='center', va='center', transform=ax4.transAxes)
+            else:
+                ax4.text(0.5, 0.5, 'Principal components\nnot available', 
+                        ha='center', va='center', transform=ax4.transAxes)
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / f"{prefix}_pca_analysis.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            
+        except Exception as e:
+            print(f"Warning: Could not create PCA visualization: {e}")
+    
+    def _create_landscape_visualization(self, landscape_data: Dict[str, Any], prefix: str):
+        """Create comprehensive energy landscape visualizations"""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as patches
+            from matplotlib.colors import LinearSegmentedColormap
+            
+            landscape = landscape_data['energy_landscape']
+            pc1_bins = landscape_data['landscape_pc1_bins']
+            pc2_bins = landscape_data['landscape_pc2_bins']
+            gradient_x = landscape_data['landscape_gradient_x']
+            gradient_y = landscape_data['landscape_gradient_y']
+            laplacian = landscape_data['landscape_laplacian']
+            minima = landscape_data.get('landscape_minima', [])
+            
+            # Create comprehensive landscape visualization
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
+            
+            # Plot 1: Energy landscape with contours
+            pc1_centers = (pc1_bins[:-1] + pc1_bins[1:]) / 2
+            pc2_centers = (pc2_bins[:-1] + pc2_bins[1:]) / 2
+            PC1, PC2 = np.meshgrid(pc1_centers, pc2_centers)
+            
+            # Energy contour plot
+            contour_levels = np.linspace(0, min(30, np.max(landscape)), 15)
+            cs = ax1.contourf(PC1, PC2, landscape, levels=contour_levels, cmap='viridis')
+            contour_lines = ax1.contour(PC1, PC2, landscape, levels=contour_levels, 
+                                      colors='white', alpha=0.3, linewidths=0.5)
+            ax1.clabel(contour_lines, inline=True, fontsize=8, fmt='%.1f')
+            
+            # Mark minima
+            if minima:
+                for i, (pc1_min, pc2_min, energy_min) in enumerate(minima[:5]):
+                    ax1.plot(pc1_min, pc2_min, 'r*', markersize=15, markeredgewidth=1, markeredgecolor='white')
+                    ax1.text(pc1_min, pc2_min + 0.1, f'M{i+1}', ha='center', va='bottom', 
+                           color='white', fontweight='bold', fontsize=9)
+            
+            ax1.set_xlabel('PC1')
+            ax1.set_ylabel('PC2')
+            ax1.set_title('Free Energy Landscape (kJ/mol)')
+            
+            # Add colorbar
+            cbar1 = plt.colorbar(cs, ax=ax1, shrink=0.8)
+            cbar1.set_label('Energy (kJ/mol)')
+            
+            # Plot 2: 3D surface plot
+            from mpl_toolkits.mplot3d import Axes3D
+            ax2.remove()
+            ax2 = fig.add_subplot(2, 2, 2, projection='3d')
+            
+            # Downsample for 3D plot if too dense
+            step = max(1, landscape.shape[0] // 25)
+            X_sub = PC1[::step, ::step]
+            Y_sub = PC2[::step, ::step]
+            Z_sub = landscape[::step, ::step]
+            
+            surf = ax2.plot_surface(X_sub, Y_sub, Z_sub, cmap='viridis', alpha=0.8, 
+                                  linewidth=0, antialiased=True)
+            ax2.set_xlabel('PC1')
+            ax2.set_ylabel('PC2')
+            ax2.set_zlabel('Energy (kJ/mol)')
+            ax2.set_title('3D Energy Surface')
+            ax2.view_init(elev=30, azim=45)
+            
+            # Plot 3: Gradient magnitude (force field)
+            gradient_mag = np.sqrt(gradient_x**2 + gradient_y**2)
+            im3 = ax3.imshow(gradient_mag, extent=[pc1_bins[0], pc1_bins[-1], pc2_bins[0], pc2_bins[-1]], 
+                           origin='lower', cmap='plasma', aspect='auto')
+            
+            # Add gradient vectors (downsampled)
+            step = max(1, landscape.shape[0] // 15)
+            X_grad = PC1[::step, ::step]
+            Y_grad = PC2[::step, ::step]
+            U_grad = -gradient_x[::step, ::step]  # Negative for forces (point downhill)
+            V_grad = -gradient_y[::step, ::step]
+            
+            ax3.quiver(X_grad, Y_grad, U_grad, V_grad, scale=None, alpha=0.7, color='white', width=0.002)
+            ax3.set_xlabel('PC1')
+            ax3.set_ylabel('PC2')
+            ax3.set_title('Gradient Magnitude & Force Vectors')
+            
+            cbar3 = plt.colorbar(im3, ax=ax3, shrink=0.8)
+            cbar3.set_label('|∇G| (kJ/mol/unit)')
+            
+            # Plot 4: Laplacian (curvature)
+            im4 = ax4.imshow(laplacian, extent=[pc1_bins[0], pc1_bins[-1], pc2_bins[0], pc2_bins[-1]], 
+                           origin='lower', cmap='RdBu_r', aspect='auto')
+            
+            # Mark minima on Laplacian plot
+            if minima:
+                for i, (pc1_min, pc2_min, _) in enumerate(minima[:5]):
+                    ax4.plot(pc1_min, pc2_min, 'ko', markersize=8, markerfacecolor='yellow', 
+                           markeredgewidth=2, markeredgecolor='black')
+            
+            ax4.set_xlabel('PC1')
+            ax4.set_ylabel('PC2')
+            ax4.set_title('Laplacian (Curvature)')
+            
+            cbar4 = plt.colorbar(im4, ax=ax4, shrink=0.8)
+            cbar4.set_label('∇²G (curvature)')
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / f"{prefix}_energy_landscape.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Create separate detailed contour plot
+            fig2, ax = plt.subplots(1, 1, figsize=(10, 8))
+            
+            # High-resolution contour plot
+            contour_levels_detailed = np.linspace(0, min(25, np.max(landscape)), 25)
+            cs_detailed = ax.contourf(PC1, PC2, landscape, levels=contour_levels_detailed, cmap='viridis')
+            contour_lines_detailed = ax.contour(PC1, PC2, landscape, levels=contour_levels_detailed, 
+                                             colors='white', alpha=0.4, linewidths=0.8)
+            
+            # Add energy minima with labels
+            if minima:
+                for i, (pc1_min, pc2_min, energy_min) in enumerate(minima):
+                    ax.plot(pc1_min, pc2_min, 'r*', markersize=20, markeredgewidth=2, markeredgecolor='white')
+                    ax.text(pc1_min, pc2_min + 0.15, f'Min {i+1}\n{energy_min:.1f} kJ/mol', 
+                           ha='center', va='bottom', color='white', fontweight='bold', 
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='black', alpha=0.7))
+            
+            ax.set_xlabel('PC1 Projection', fontsize=12)
+            ax.set_ylabel('PC2 Projection', fontsize=12)
+            ax.set_title(f'Free Energy Landscape - Temperature: {landscape_data.get("landscape_temperature", 310):.0f} K', 
+                        fontsize=14)
+            
+            # Enhanced colorbar
+            cbar = plt.colorbar(cs_detailed, ax=ax, shrink=0.8, pad=0.02)
+            cbar.set_label('Free Energy (kJ/mol)', fontsize=12)
+            cbar.ax.tick_params(labelsize=10)
+            
+            # Add some statistics as text
+            stats_text = f"Energy Range: {np.max(landscape) - np.min(landscape):.1f} kJ/mol\n"
+            stats_text += f"Minima Found: {len(minima)}\n"
+            stats_text += f"Frames: {landscape_data.get('landscape_total_frames', 'N/A')}"
+            
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, verticalalignment='top',
+                   bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8),
+                   fontsize=10)
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / f"{prefix}_energy_landscape_detailed.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            
+        except Exception as e:
+            print(f"Warning: Could not create energy landscape visualization: {e}")
+            import traceback
+            print(traceback.format_exc())
 
 
 # =====================================================
@@ -1029,6 +1864,13 @@ class MDCompare:
             # Compute network metrics
             network_metrics = self.analyzer.compute_network_metrics(simulation)
             
+            # Compute dynamic analysis (DCCM and PCA)
+            dynamic_results = self.analyzer.compute_dynamic_analysis(simulation)
+            
+            # Store dynamic results in simulation
+            if dynamic_results:
+                simulation.dynamic_analysis = dynamic_results
+            
             # Trajectory segmentation analysis
             if self.analysis_config.segments > 1:
                 segment_results = self.analyzer.analyze_trajectory_segments(simulation)
@@ -1040,7 +1882,10 @@ class MDCompare:
                 'contact_maps_computed': list(contact_maps.keys()),
                 'network_nodes': network_metrics.n_nodes,
                 'network_edges': network_metrics.n_edges,
-                'network_density': network_metrics.density
+                'network_density': network_metrics.density,
+                'dynamic_analysis_computed': bool(dynamic_results),
+                'dccm_computed': 'dccm_matrix' in dynamic_results if dynamic_results else False,
+                'pca_computed': 'pca_eigenvalues' in dynamic_results if dynamic_results else False
             }
         
         return results_summary

@@ -8,12 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Integration with protein structure databases (PDB, AlphaFold)
-- Machine learning models
-- Support for additional interaction types (π-π stacking, cation-π)
-- Enhanced visualization
+- Advanced community detection with multiple algorithms (Leiden, Louvain, Spectral)
+- Comprehensive allosteric pathway analysis and hotspot identification
+- Network robustness analysis and statistical significance testing
+- Enhanced visualization dashboard with multi-panel network analysis
 
-## [1.1.0] - 2026-04-09
+## [1.2.0] - 2026-04-10
 
 ### Added
 - **Dynamic Analysis Capabilities**: 
@@ -21,11 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Principal Component Analysis (PCA) for identifying dominant motion modes
   - Automatic integration with existing network analysis workflow
 
+- **Energy Landscape Analysis**:
+  - Free energy surface calculation from PC1/PC2 projections using Boltzmann relation
+  - Gaussian smoothing and thermodynamic analysis with temperature control
+  - Energy minima detection with automated separation filtering
+  - Energy barrier analysis between conformational states
+  - Gradient and Laplacian computation for force field and curvature analysis
+  - 2D histogram-based probability distributions with configurable binning
+
 - **New CLI Options**:
   - `--compute-dccm` / `--no-dccm` flags for DCCM computation control (default: enabled)
   - `--compute-pca` / `--no-pca` flags for PCA analysis control (default: enabled)
   - `--pca-components N` to specify number of principal components (default: 10)
   - `--dccm-selection "selection"` to specify atoms for dynamic analysis (default: "name CA")
+  - `--compute-landscape` / `--no-landscape` flags for energy landscape control (default: enabled)
+  - `--landscape-temp 310` to set temperature for energy calculations (default: 310K)
+  - `--landscape-bins 50` to specify histogram resolution (default: 50)
+  - `--landscape-sigma 1.0` to control Gaussian smoothing (default: 1.0)
 
 - **Enhanced Output Files**:
   - `*_dccm_matrix.npy/.csv` - Dynamic cross-correlation matrices
@@ -35,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `*_pca_variance_explained.npy` - Variance explained by each component
   - `*_principal_components.npy` - Trajectory projections onto PCs
   - `*_pca_analysis.png` - Comprehensive PCA plots (scree, variance, projections)
+  - `*_energy_landscape.npy` - Free energy surface matrix
+  - `*_landscape_pc1_bins.npy/.._pc2_bins.npy` - Histogram bin edges
+  - `*_landscape_gradient_x/y.npy` - Energy gradients (force field components)
+  - `*_landscape_laplacian.npy` - Curvature analysis matrix
+  - `*_energy_landscape.png` - 4-panel comprehensive landscape analysis
+  - `*_energy_landscape_detailed.png` - High-resolution contour plot with statistics
+  - `*_landscape_summary.txt` - Energy landscape analysis summary with minima/barriers
   - `*_pca_summary.txt` - PCA analysis summary with variance breakdown
   - `*_dynamic_summary.txt` - Overall dynamic analysis summary
 
@@ -42,12 +61,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Automatic DCCM heatmap generation with diverging colormap
   - Multi-panel PCA analysis plots (eigenvalue spectrum, variance explained, trajectory projections)
   - Color-coded correlation matrices showing positive/negative correlations
+  - 4-panel energy landscape visualization: contour plot, 3D surface, gradient field, curvature
+  - High-resolution detailed contour plots with energy minima marked
   - PC1-PC2 trajectory evolution plots with temporal coloring
 
+- **Scientific Energy Landscape Features**:
+  - Boltzmann relation implementation: G = -kB*T*ln(P) for thermodynamically correct energies
+  - Automated energy minima detection with configurable separation filtering
+  - Energy barrier height analysis between conformational states
+  - Force field computation from energy gradients for pathway analysis
+  - Laplacian curvature analysis for stability/instability region identification
+  - Temperature-dependent conformational accessibility assessment
+  
 ### Changed
 - **AnalysisConfig**: Extended with dynamic analysis configuration options
   - Added `compute_dccm`, `compute_pca`, `pca_components`, `dccm_selection` parameters
-- **NetworkMetrics**: Extended dataclass to include DCCM and PCA results
+  - Added `landscape_temperature`, `landscape_bins`, `landscape_sigma` controls
+- **NetworkMetrics**: Extended dataclass to include DCCM, PCA, and energy landscape results
 - **CLI Interface**: All analysis modes (single, compare, diff) now support dynamic analysis flags
 - **Output Management**: Automatic saving and visualization of dynamic analysis results
 
@@ -64,28 +94,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Memory Optimization**: Smart handling of large coordinate arrays
 
 ### Technical Improvements
-- **PCA Implementation**: Robust eigenvalue decomposition with proper variance calculation
+- **PCA Implementation**: Robust eigenvalue decomposition with  DCCM, PCA, and energy landscape demonstrations
 - **DCCM Algorithm**: Mathematically correct cross-correlation computation
 - **Preprocessing Integration**: Proper alignment and centering for dynamic analysis
+- **Energy Landscape**: Scientifically validated implementation following established methodologies
 - **Visualization Pipeline**: Automated generation of publication-quality plots
 
 ### Dependencies
 - **SciPy**: Enhanced requirement for robust linear algebra operations (`scipy.linalg.eigh`)
 - **Matplotlib/Seaborn**: Leveraged for advanced visualization capabilities
 - **NumPy**: Optimized matrix operations for efficient DCCM/PCA computation
+- **Gaussian Filtering**: scipy.ndimage for energy landscape smoothing
 
 ### Usage Examples
 ```bash
-# Enable all dynamic analysis (default)
+# Enable all dynamic analysis (default behavior)
 md-compare single -t system.pdb -x traj.xtc -n analysis
 
-# Customize PCA components and selection
+# Customize energy landscape parameters
 md-compare single -t system.pdb -x traj.xtc -n analysis \
-  --pca-components 15 --dccm-selection "backbone"
+  --landscape-temp 300 --landscape-bins 60 --landscape-sigma 1.2
 
-# Disable dynamic analysis for speed
+# High-resolution dynamics analysis
 md-compare single -t system.pdb -x traj.xtc -n analysis \
-  --no-dccm --no-pca
+  --pca-components 20 --dccm-selection "backbone" --landscape-bins 80
+
+# Speed-optimized analysis (disable dynamics)
+md-compare single -t system.pdb -x traj.xtc -n analysis \
+  --no-dccm --no-pca --no-landscape
 ```
 
 ## [1.0.0] - 2026-04-08

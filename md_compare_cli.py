@@ -50,7 +50,11 @@ def create_analysis_config_from_args(args) -> AnalysisConfig:
         compute_dccm=args.compute_dccm,
         compute_pca=args.compute_pca,
         pca_components=args.pca_components,
-        dccm_selection=args.dccm_selection
+        dccm_selection=args.dccm_selection,
+        compute_energy_landscape=args.compute_landscape,
+        landscape_temperature=args.landscape_temp,
+        landscape_bins=args.landscape_bins,
+        landscape_sigma=args.landscape_sigma
     )
 
 
@@ -402,6 +406,16 @@ For more information, visit: https://github.com/yourusername/md-compare
                               help='Number of principal components to compute (default: 10)')
     single_parser.add_argument('--dccm-selection', default='name CA',
                               help='Atom selection for dynamic analysis (default: "name CA")')
+    single_parser.add_argument('--compute-landscape', action='store_true', default=True,
+                              help='Compute energy landscape from PC1/PC2 (default: True)')
+    single_parser.add_argument('--no-landscape', dest='compute_landscape', action='store_false',
+                              help='Skip energy landscape computation')
+    single_parser.add_argument('--landscape-temp', type=float, default=310.0,
+                              help='Temperature for energy landscape (K, default: 310)')
+    single_parser.add_argument('--landscape-bins', type=int, default=50,
+                              help='Number of bins for energy landscape (default: 50)')
+    single_parser.add_argument('--landscape-sigma', type=float, default=1.0,
+                              help='Gaussian smoothing sigma for landscape (default: 1.0)')
     
     # Multiple simulation comparison
     compare_parser = subparsers.add_parser(
@@ -442,6 +456,16 @@ For more information, visit: https://github.com/yourusername/md-compare
                                help='Number of principal components to compute (default: 10)')
     compare_parser.add_argument('--dccm-selection', default='name CA',
                                help='Atom selection for dynamic analysis (default: "name CA")')
+    compare_parser.add_argument('--compute-landscape', action='store_true', default=True,
+                               help='Compute energy landscape from PC1/PC2 (default: True)')
+    compare_parser.add_argument('--no-landscape', dest='compute_landscape', action='store_false',
+                               help='Skip energy landscape computation')
+    compare_parser.add_argument('--landscape-temp', type=float, default=310.0,
+                               help='Temperature for energy landscape (K, default: 310)')
+    compare_parser.add_argument('--landscape-bins', type=int, default=50,
+                               help='Number of bins for energy landscape (default: 50)')
+    compare_parser.add_argument('--landscape-sigma', type=float, default=1.0,
+                               help='Gaussian smoothing sigma for landscape (default: 1.0)')
     
     # Differential analysis
     diff_parser = subparsers.add_parser(
@@ -496,6 +520,16 @@ For more information, visit: https://github.com/yourusername/md-compare
                             help='Number of principal components to compute (default: 10)')
     diff_parser.add_argument('--dccm-selection', default='name CA',
                             help='Atom selection for dynamic analysis (default: "name CA")')
+    diff_parser.add_argument('--compute-landscape', action='store_true', default=True,
+                            help='Compute energy landscape from PC1/PC2 (default: True)')
+    diff_parser.add_argument('--no-landscape', dest='compute_landscape', action='store_false',
+                            help='Skip energy landscape computation')
+    diff_parser.add_argument('--landscape-temp', type=float, default=310.0,
+                            help='Temperature for energy landscape (K, default: 310)')
+    diff_parser.add_argument('--landscape-bins', type=int, default=50,
+                            help='Number of bins for energy landscape (default: 50)')
+    diff_parser.add_argument('--landscape-sigma', type=float, default=1.0,
+                            help='Gaussian smoothing sigma for landscape (default: 1.0)')
     
     # Example configuration generator
     example_parser = subparsers.add_parser(
