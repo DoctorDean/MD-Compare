@@ -83,6 +83,40 @@ md-compare single \
   --threshold 0.2
 ```
 
+### Advanced Network Analysis with Allosteric Pathways
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Network \
+  -o results/hiv_wt_network \
+  --community-method leiden \
+  --allosteric-sources A_50 B_50 A_48 B_48 \
+  --allosteric-targets A_25 B_25 A_27 B_27 \
+  --cutoff 4.5 \
+  --threshold 0.2
+```
+
+### Comprehensive Analysis (All Features)
+```bash
+md-compare single \
+  -t data/hiv_wt_complex.pdb \
+  -x data/hiv_wt_trajectory.xtc \
+  -n HIV_WT_Full \
+  -o results/hiv_wt_full \
+  --compute-dccm \
+  --compute-pca \
+  --compute-landscape \
+  --community-method leiden \
+  --allosteric-sources A_50 B_50 A_45 B_45 A_48 B_48 \
+  --allosteric-targets A_25 B_25 A_27 B_27 A_82 B_82 \
+  --pca-components 20 \
+  --landscape-bins 70 \
+  --cutoff 4.5 \
+  --threshold 0.18 \
+  --segments 8
+```
+
 ### High-Resolution Energy Landscape
 ```bash
 md-compare single \
@@ -130,6 +164,13 @@ md-compare single \
 - **Conformational Routes**: Pathways between stable states
 - **Thermodynamic Profile**: Temperature-dependent conformational preferences
 
+### Advanced Network Analysis Results
+- **Community Detection**: 4-6 functional communities (domains, interfaces, active regions)
+- **Allosteric Pathways**: Communication routes between flaps and active site
+- **Network Robustness**: Resilience to node/edge removal (typically 0.6-0.8)
+- **Critical Residues**: Statistically significant nodes (z-score > 1.96)
+- **Communication Efficiency**: Quality of information flow through network
+
 ### Key Insights Expected
 1. **Flap Dynamics**: High centrality for flap region residues (Ile50A, Ile50B)
 2. **Active Site Hub**: Asp25A and Asp25B as central catalytic residues
@@ -166,6 +207,20 @@ results/hiv_wt_analysis/
 ├── HIV_WT_Baseline_landscape_summary.txt       # Energy landscape summary
 ├── HIV_WT_Baseline_energy_landscape.png        # Comprehensive landscape plots
 ├── HIV_WT_Baseline_energy_landscape_detailed.png # High-resolution contour plot
+├── HIV_WT_Baseline_community_analysis.json     # Detailed community detection results
+├── HIV_WT_Baseline_community_assignments.csv   # Node-to-community mapping
+├── HIV_WT_Baseline_community_summary.txt       # Community detection summary
+├── HIV_WT_Baseline_path_metrics.json          # Detailed path analysis
+├── HIV_WT_Baseline_path_summary.txt           # Path analysis summary
+├── HIV_WT_Baseline_allosteric_analysis.json    # Complete allosteric analysis
+├── HIV_WT_Baseline_allosteric_summary.txt      # Allosteric pathway summary
+├── HIV_WT_Baseline_allosteric_hotspots.csv     # Hotspot residues with scores
+├── HIV_WT_Baseline_robustness_analysis.json    # Network robustness results
+├── HIV_WT_Baseline_robustness_summary.txt      # Robustness summary
+├── HIV_WT_Baseline_centrality_significance.json # Statistical significance data
+├── HIV_WT_Baseline_significant_nodes.csv       # Statistically significant nodes
+├── HIV_WT_Baseline_significance_summary.txt    # Significance analysis summary
+├── HIV_WT_Baseline_advanced_network_analysis.png # Comprehensive network visualization
 ├── analysis_config.json                        # Analysis parameters used
 └── workflow_summary.json                       # Complete analysis summary
 ```
@@ -243,6 +298,63 @@ Use the contact matrix to identify:
 5. **3D surface**: Overall shape of conformational landscape
 6. **Gradient vectors**: Forces driving conformational changes
 7. **Laplacian plot**: Curvature showing stability/instability regions
+
+#### Advanced Network Analysis:
+1. Review `HIV_WT_Baseline_advanced_network_analysis.png` comprehensive overview
+2. **Community structure**: Functional domain organization
+3. **Allosteric hotspots**: Critical residues for communication
+4. **Network robustness**: System resilience to perturbations
+5. **Communication efficiency**: Quality of information flow
+6. **Statistical significance**: Identify outlier nodes (high z-scores)
+
+#### Community Detection Analysis:
+```python
+# Load community assignments
+import pandas as pd
+comm_df = pd.read_csv('results/hiv_wt_analysis/HIV_WT_Baseline_community_assignments.csv')
+
+# Analyze community composition
+community_groups = comm_df.groupby('community_id')['node'].apply(list).to_dict()
+
+print("Community Structure:")
+for comm_id, nodes in community_groups.items():
+    print(f"Community {comm_id}: {len(nodes)} nodes")
+    print(f"  Example nodes: {nodes[:5]}")  # Show first 5 nodes
+```
+
+#### Allosteric Pathway Analysis:
+```python
+# Load allosteric hotspots
+hotspots_df = pd.read_csv('results/hiv_wt_analysis/HIV_WT_Baseline_allosteric_hotspots.csv')
+
+print("Top 10 Allosteric Hotspots:")
+print(hotspots_df.head(10)[['node', 'hotspot_score', 'frequency']])
+
+# Identify functional regions
+flap_hotspots = hotspots_df[hotspots_df['node'].str.contains('_4[8-9]|_5[0-2]')]
+active_hotspots = hotspots_df[hotspots_df['node'].str.contains('_2[5-7]')]
+
+print(f"\nFlap region hotspots: {len(flap_hotspots)}")
+print(f"Active site hotspots: {len(active_hotspots)}")
+```
+
+#### Network Robustness Analysis:
+```python
+# Load robustness data
+import json
+with open('results/hiv_wt_analysis/HIV_WT_Baseline_robustness_analysis.json', 'r') as f:
+    robustness = json.load(f)
+
+print("Network Robustness Metrics:")
+print(f"Node attack robustness: {robustness['node_attack_robustness']:.3f}")
+print(f"Random failure robustness: {robustness['random_failure_robustness']:.3f}")
+print(f"Edge attack robustness: {robustness['edge_attack_robustness']:.3f}")
+
+critical_nodes = robustness['critical_nodes']
+print(f"\nTop 5 Critical Nodes:")
+for node in critical_nodes[:5]:
+    print(f"  {node}")
+```
 
 #### PyMOL Structure Visualization:
 ```python
@@ -454,6 +566,30 @@ md-compare single ... --landscape-bins 70
 
 # Check temperature setting
 md-compare single ... --landscape-temp 310
+```
+
+**Community detection fails:**
+```bash
+# Try different method
+md-compare single ... --community-method louvain
+
+# Skip if problematic
+md-compare single ... --no-communities
+```
+
+**Allosteric analysis slow:**
+```bash
+# Specify fewer sources/targets
+md-compare single ... --allosteric-sources A_50 B_50 --allosteric-targets A_25 B_25
+
+# Skip if not needed
+md-compare single ... --no-allosteric
+```
+
+**Memory issues with advanced analysis:**
+```bash
+# Disable resource-intensive components
+md-compare single ... --no-paths --no-allosteric --community-method louvain
 ```
 
 This baseline analysis establishes the foundation for understanding how mutations and different conditions affect the HIV protease network structure and dynamics.

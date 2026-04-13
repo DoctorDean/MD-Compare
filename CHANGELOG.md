@@ -8,10 +8,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Advanced community detection with multiple algorithms (Leiden, Louvain, Spectral)
-- Comprehensive allosteric pathway analysis and hotspot identification
-- Network robustness analysis and statistical significance testing
-- Enhanced visualization dashboard with multi-panel network analysis
+- pyEMMA integration 
+- Pocket detection and characterization across simulations
+
+## [1.3.0] - 2026-04-13
+
+### Added
+- **Advanced Community Detection**:
+  - Multi-algorithm support: Leiden, Louvain, Spectral, and Hierarchical clustering
+  - Modularity optimization with quality assessment
+  - Intra/inter-community density calculations
+  - Community size distributions and node assignments
+
+- **Comprehensive Path Metrics Analysis**:
+  - Global and local efficiency measurements
+  - Characteristic path length and network diameter calculation
+  - Path length distributions with statistical analysis
+  - Node eccentricity computation (remoteness measures)
+  - Critical pathway identification through network hubs
+
+- **Sophisticated Allosteric Pathway Analysis**:
+  - Automated functional region detection (HIV protease-specific)
+  - Communication efficiency quantification between functional sites
+  - Allosteric hotspot discovery with frequency-based scoring
+  - Pathway bottleneck identification and redundancy assessment
+  - Inter-community bridge analysis for functional regions
+
+- **Network Robustness Analysis**:
+  - Attack tolerance testing (targeted, random, edge-based)
+  - Giant component tracking and fragmentation point identification
+  - Critical node and edge identification for connectivity
+  - Network resilience scoring and vulnerability assessment
+
+- **Statistical Significance Analysis**:
+  - Centrality z-score computation for all measures
+  - Statistical outlier identification (highly significant, significant, notable)
+  - Multi-measure analysis across betweenness, closeness, degree, eigenvector
+  - Node classification by statistical significance levels
+
+- **Advanced Visualization Dashboard**:
+  - 9-panel comprehensive network analysis overview
+  - Community structure, significance, and robustness visualizations
+  - Allosteric hotspot rankings and communication efficiency heatmaps
+  - Path analysis and centrality correlation plots
+  - Summary statistics panel with key metrics
+
+### New CLI Options
+- `--community-method leiden|louvain|spectral|hierarchical` - Choose community detection algorithm
+- `--no-communities` - Skip community detection
+- `--no-paths` - Skip detailed path analysis
+- `--no-allosteric` - Skip allosteric pathway analysis
+- `--allosteric-sources A_50 B_50` - Specify allosteric source nodes
+- `--allosteric-targets A_25 B_25` - Specify allosteric target nodes
+
+### Enhanced Output Files
+- `*_community_analysis.json` - Detailed community detection results
+- `*_community_assignments.csv` - Node-to-community mapping
+- `*_path_metrics.json` - Comprehensive path analysis data
+- `*_allosteric_analysis.json` - Complete allosteric pathway analysis
+- `*_allosteric_hotspots.csv` - Ranked hotspot residues with scores
+- `*_robustness_analysis.json` - Network resilience data
+- `*_centrality_significance.json` - Statistical significance analysis
+- `*_significant_nodes.csv` - Statistically significant nodes
+- `*_advanced_network_analysis.png` - Comprehensive visualization dashboard
+
+### Scientific Enhancements
+- **HIV Protease Specialization**: Automated detection of flap regions, active site, and interface
+- **Allosteric Mechanism Mapping**: Direct identification of communication pathways
+- **Drug Target Discovery**: Network-based identification of critical therapeutic targets
+- **Mutation Impact Prediction**: Robustness analysis for resistance mechanism studies
+
+### Performance Improvements
+- **Efficient Algorithms**: Optimized community detection with multiple fallback methods
+- **Scalable Analysis**: Smart sampling for large networks (>500 nodes)
+- **Memory Optimization**: Efficient sparse matrix operations for path analysis
+- **Progress Monitoring**: Detailed progress reporting for long computations
+
+### Technical Architecture
+- **Modular Design**: Separate methods for each analysis component
+- **Error Handling**: Graceful fallback when advanced algorithms fail
+- **Statistical Rigor**: Proper significance testing with z-score analysis
+- **Cross-Platform**: Compatible with Windows, macOS, and Linux
+
+### Dependencies
+- **Optional Enhancement**: `igraph` + `leidenalg` for Leiden community detection
+- **Scikit-learn**: For spectral clustering and advanced network analysis
+- **Scipy Enhanced**: Additional clustering and statistical functions
+
+### Usage Examples
+```bash
+# Full advanced network analysis
+md-compare single -t system.pdb -x traj.xtc -n analysis \
+  --community-method leiden \
+  --allosteric-sources A_50 B_50 \
+  --allosteric-targets A_25 B_25
+
+# Fast analysis (skip advanced features)
+md-compare single -t system.pdb -x traj.xtc -n analysis \
+  --no-allosteric --no-paths --community-method louvain
+```
+
+
 
 ## [1.2.0] - 2026-04-10
 

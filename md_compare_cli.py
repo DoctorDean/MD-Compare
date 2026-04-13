@@ -54,7 +54,13 @@ def create_analysis_config_from_args(args) -> AnalysisConfig:
         compute_energy_landscape=args.compute_landscape,
         landscape_temperature=args.landscape_temp,
         landscape_bins=args.landscape_bins,
-        landscape_sigma=args.landscape_sigma
+        landscape_sigma=args.landscape_sigma,
+        compute_communities=getattr(args, 'compute_communities', True),
+        community_method=getattr(args, 'community_method', 'leiden'),
+        compute_paths=getattr(args, 'compute_paths', True),
+        allosteric_analysis=getattr(args, 'allosteric_analysis', True),
+        allosteric_source_nodes=getattr(args, 'allosteric_sources', None),
+        allosteric_target_nodes=getattr(args, 'allosteric_targets', None)
     )
 
 
@@ -416,6 +422,19 @@ For more information, visit: https://github.com/yourusername/md-compare
                               help='Number of bins for energy landscape (default: 50)')
     single_parser.add_argument('--landscape-sigma', type=float, default=1.0,
                               help='Gaussian smoothing sigma for landscape (default: 1.0)')
+    single_parser.add_argument('--community-method', default='leiden',
+                              choices=['leiden', 'louvain', 'spectral', 'hierarchical'],
+                              help='Community detection method (default: leiden)')
+    single_parser.add_argument('--no-communities', dest='compute_communities', action='store_false',
+                              help='Skip community detection')
+    single_parser.add_argument('--no-paths', dest='compute_paths', action='store_false', 
+                              help='Skip detailed path analysis')
+    single_parser.add_argument('--no-allosteric', dest='allosteric_analysis', action='store_false',
+                              help='Skip allosteric pathway analysis')
+    single_parser.add_argument('--allosteric-sources', nargs='+', 
+                              help='Specific residues to use as allosteric sources (e.g., A_50 B_50)')
+    single_parser.add_argument('--allosteric-targets', nargs='+',
+                              help='Specific residues to use as allosteric targets (e.g., A_25 B_25)')
     
     # Multiple simulation comparison
     compare_parser = subparsers.add_parser(
@@ -466,6 +485,19 @@ For more information, visit: https://github.com/yourusername/md-compare
                                help='Number of bins for energy landscape (default: 50)')
     compare_parser.add_argument('--landscape-sigma', type=float, default=1.0,
                                help='Gaussian smoothing sigma for landscape (default: 1.0)')
+    compare_parser.add_argument('--community-method', default='leiden',
+                               choices=['leiden', 'louvain', 'spectral', 'hierarchical'],
+                               help='Community detection method (default: leiden)')
+    compare_parser.add_argument('--no-communities', dest='compute_communities', action='store_false',
+                               help='Skip community detection')
+    compare_parser.add_argument('--no-paths', dest='compute_paths', action='store_false',
+                               help='Skip detailed path analysis') 
+    compare_parser.add_argument('--no-allosteric', dest='allosteric_analysis', action='store_false',
+                               help='Skip allosteric pathway analysis')
+    compare_parser.add_argument('--allosteric-sources', nargs='+',
+                               help='Specific residues to use as allosteric sources (e.g., A_50 B_50)')
+    compare_parser.add_argument('--allosteric-targets', nargs='+',
+                               help='Specific residues to use as allosteric targets (e.g., A_25 B_25)')
     
     # Differential analysis
     diff_parser = subparsers.add_parser(
@@ -530,6 +562,19 @@ For more information, visit: https://github.com/yourusername/md-compare
                             help='Number of bins for energy landscape (default: 50)')
     diff_parser.add_argument('--landscape-sigma', type=float, default=1.0,
                             help='Gaussian smoothing sigma for landscape (default: 1.0)')
+    diff_parser.add_argument('--community-method', default='leiden',
+                            choices=['leiden', 'louvain', 'spectral', 'hierarchical'],
+                            help='Community detection method (default: leiden)')
+    diff_parser.add_argument('--no-communities', dest='compute_communities', action='store_false',
+                            help='Skip community detection')
+    diff_parser.add_argument('--no-paths', dest='compute_paths', action='store_false',
+                            help='Skip detailed path analysis')
+    diff_parser.add_argument('--no-allosteric', dest='allosteric_analysis', action='store_false',
+                            help='Skip allosteric pathway analysis')
+    diff_parser.add_argument('--allosteric-sources', nargs='+',
+                            help='Specific residues to use as allosteric sources (e.g., A_50 B_50)')
+    diff_parser.add_argument('--allosteric-targets', nargs='+',
+                            help='Specific residues to use as allosteric targets (e.g., A_25 B_25)')
     
     # Example configuration generator
     example_parser = subparsers.add_parser(
