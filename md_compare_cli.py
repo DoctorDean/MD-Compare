@@ -326,7 +326,7 @@ def create_example_config(output_path: str):
             "threshold": 0.2,
             "timeout_seconds": 300,
             "segments": 5,
-            "preprocess": true,
+            "preprocess": True,
             "align_selection": "name CA",
             "center_selection": "protein"
         }

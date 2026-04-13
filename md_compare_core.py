@@ -328,6 +328,51 @@ class NetworkAnalyzer:
         self.config = config
         self._preprocessor = None
     
+    def _safe_shortest_path_length(self, G, source, target=None):
+        """NetworkX API-compatible shortest path length calculation"""
+        try:
+            if target is None:
+                # Single source to all targets
+                try:
+                    return nx.single_source_shortest_path_length(G, source, weight='weight')
+                except TypeError:
+                    return nx.single_source_shortest_path_length(G, source)
+            else:
+                # Specific source to target
+                try:
+                    return nx.shortest_path_length(G, source, target, weight='weight')
+                except TypeError:
+                    return nx.shortest_path_length(G, source, target)
+        except Exception as e:
+            raise e
+    
+    def _safe_shortest_path(self, G, source, target):
+        """NetworkX API-compatible shortest path calculation"""
+        try:
+            try:
+                return nx.shortest_path(G, source, target, weight='weight')
+            except TypeError:
+                return nx.shortest_path(G, source, target)
+        except Exception as e:
+            raise e
+    
+    def _safe_average_shortest_path_length(self, G):
+        """NetworkX API-compatible average shortest path length"""
+        try:
+            try:
+                return nx.average_shortest_path_length(G, weight='weight')
+            except TypeError:
+                return nx.average_shortest_path_length(G)
+        except Exception as e:
+            return float('inf')
+    
+    def _safe_diameter(self, G):
+        """NetworkX API-compatible diameter calculation"""
+        try:
+            return nx.diameter(G)
+        except Exception as e:
+            return float('inf')
+    
     def compute_contact_maps(self, simulation: MDSimulation, 
                            start_frame: int = 0, end_frame: Optional[int] = None) -> Dict[str, np.ndarray]:
         """
@@ -1318,9 +1363,21 @@ class NetworkAnalyzer:
             nodes = list(G.nodes())
             n_nodes = len(nodes)
             
+            print(f"Network has {n_nodes} nodes, {len(G.edges())} edges")
+            
             if n_nodes < 2:
+                print("Warning: Network too small for path analysis")
                 metrics.path_metrics = path_metrics
                 return metrics
+            
+            # Check if network is connected
+            if not nx.is_connected(G):
+                components = list(nx.connected_components(G))
+                largest_cc = max(components, key=len)
+                print(f"Network is disconnected. Analyzing largest component with {len(largest_cc)} nodes")
+                G = G.subgraph(largest_cc).copy()
+                nodes = list(G.nodes())
+                n_nodes = len(nodes)
             
             # Compute all-pairs shortest paths (sample for large networks)
             if n_nodes > 500:
@@ -1329,41 +1386,65 @@ class NetworkAnalyzer:
                 print(f"Sampling {len(sample_nodes)} nodes for path analysis")
             else:
                 sample_nodes = nodes
+                print(f"Computing paths for all {len(sample_nodes)} nodes")
             
             # Compute shortest path lengths
             path_lengths = []
             path_dict = {}
             
-            for source in sample_nodes:
+            print(f"Computing paths for {len(sample_nodes)} nodes...")
+            
+            for i, source in enumerate(sample_nodes):
                 try:
-                    lengths = nx.single_source_shortest_path_length(G, source, weight='weight')
+                    lengths = self._safe_shortest_path_length(G, source)
                     path_dict[source] = lengths
                     
                     for target, length in lengths.items():
                         if source != target and length > 0:
                             path_lengths.append(length)
                 
+                    # Progress update for large networks
+                    if (i + 1) % 20 == 0:
+                        print(f"  Processed {i + 1}/{len(sample_nodes)} nodes")
+                        
                 except nx.NetworkXNoPath:
+                    continue
+                except Exception as e:
+                    print(f"  Warning: Path calculation failed for node {source}: {e}")
                     continue
             
             if not path_lengths:
+                print("Warning: No valid paths found")
+                path_metrics['path_length_distribution'] = {
+                    'lengths': [],
+                    'counts': [],
+                    'mean': 0.0,
+                    'std': 0.0,
+                    'median': 0.0,
+                    'error': 'No valid paths computed'
+                }
                 metrics.path_metrics = path_metrics
                 return metrics
             
+            print(f"Computed {len(path_lengths)} path lengths")
+            
             # Global path metrics
-            path_metrics['characteristic_path_length'] = np.mean(path_lengths)
-            path_metrics['network_diameter'] = max(path_lengths)
-            path_metrics['global_efficiency'] = np.mean([1/length for length in path_lengths if length > 0])
+            path_metrics['characteristic_path_length'] = float(np.mean(path_lengths))
+            path_metrics['network_diameter'] = float(max(path_lengths))
+            path_metrics['global_efficiency'] = float(np.mean([1/length for length in path_lengths if length > 0]))
             
             # Path length distribution
             unique_lengths, counts = np.unique(path_lengths, return_counts=True)
             path_metrics['path_length_distribution'] = {
-                'lengths': unique_lengths.tolist(),
-                'counts': counts.tolist(),
-                'mean': np.mean(path_lengths),
-                'std': np.std(path_lengths),
-                'median': np.median(path_lengths)
+                'lengths': unique_lengths.astype(int).tolist(),  # Ensure integer path lengths
+                'counts': counts.astype(int).tolist(),           # Ensure integer counts
+                'mean': float(np.mean(path_lengths)),
+                'std': float(np.std(path_lengths)),
+                'median': float(np.median(path_lengths)),
+                'total_paths': len(path_lengths)
             }
+            
+            print(f"Path length distribution: {dict(zip(unique_lengths, counts))}")
             
             # Node eccentricities (max distance from each node)
             for node in sample_nodes:
@@ -1385,7 +1466,7 @@ class NetworkAnalyzer:
                                 for v in neighbors:
                                     if u != v:
                                         try:
-                                            length = nx.shortest_path_length(subgraph, u, v, weight='weight')
+                                            length = self._safe_shortest_path_length(subgraph, u, v)
                                             neighbor_paths.append(1/length if length > 0 else 0)
                                         except nx.NetworkXNoPath:
                                             neighbor_paths.append(0)
@@ -1413,7 +1494,7 @@ class NetworkAnalyzer:
                         for target in path_dict[node]:
                             if path_dict[node][target] > 0:
                                 try:
-                                    path = nx.shortest_path(G, node, target, weight='weight')
+                                    path = self._safe_shortest_path(G, node, target)
                                     node_paths.append({
                                         'source': node,
                                         'target': target,
@@ -1438,8 +1519,8 @@ class NetworkAnalyzer:
                 for i, source in enumerate(analysis_nodes):
                     for target in analysis_nodes[i+1:]:
                         try:
-                            path = nx.shortest_path(G, source, target, weight='weight')
-                            length = nx.shortest_path_length(G, source, target, weight='weight')
+                            path = self._safe_shortest_path(G, source, target)
+                            length = self._safe_shortest_path_length(G, source, target)
                             
                             sample_paths[f"{source}_to_{target}"] = {
                                 'path': path,
@@ -1461,7 +1542,45 @@ class NetworkAnalyzer:
             
         except Exception as e:
             print(f"Path metrics computation failed: {e}")
-            metrics.path_metrics = {'error': str(e)}
+            
+            # Fallback: try simple path analysis on smaller sample
+            try:
+                print("Attempting fallback path analysis...")
+                simple_nodes = list(G.nodes())[:min(20, len(G.nodes()))]
+                fallback_paths = []
+                
+                for i, source in enumerate(simple_nodes):
+                    for target in simple_nodes[i+1:]:
+                        try:
+                            length = self._safe_shortest_path_length(G, source, target)
+                            if length > 0:
+                                fallback_paths.append(length)
+                        except:
+                            continue
+                
+                if fallback_paths:
+                    unique_lengths, counts = np.unique(fallback_paths, return_counts=True)
+                    metrics.path_metrics = {
+                        'characteristic_path_length': float(np.mean(fallback_paths)),
+                        'network_diameter': float(max(fallback_paths)),
+                        'global_efficiency': float(np.mean([1/l for l in fallback_paths])),
+                        'local_efficiency': 0.0,
+                        'network_efficiency': float(1.0/np.mean(fallback_paths)),
+                        'path_length_distribution': {
+                            'lengths': unique_lengths.astype(int).tolist(),
+                            'counts': counts.astype(int).tolist(),
+                            'mean': float(np.mean(fallback_paths)),
+                            'std': float(np.std(fallback_paths)),
+                            'median': float(np.median(fallback_paths)),
+                            'total_paths': len(fallback_paths)
+                        },
+                        'fallback_analysis': True
+                    }
+                    print(f"Fallback path analysis succeeded: {len(fallback_paths)} paths")
+                else:
+                    metrics.path_metrics = {'error': f'Both full and fallback path analysis failed: {str(e)}'}
+            except Exception as e2:
+                metrics.path_metrics = {'error': f'Path analysis failed: {str(e)}, fallback failed: {str(e2)}'}
         
         return metrics
     
@@ -1618,8 +1737,8 @@ class NetworkAnalyzer:
         """Compute detailed allosteric pathway between source and target"""
         try:
             # Find shortest path
-            shortest_path = nx.shortest_path(G, source, target, weight='weight')
-            shortest_length = nx.shortest_path_length(G, source, target, weight='weight')
+            shortest_path = self._safe_shortest_path(G, source, target)
+            shortest_length = self._safe_shortest_path_length(G, source, target)
             
             # Analyze pathway characteristics
             pathway_betweenness = []
@@ -1771,17 +1890,6 @@ class NetworkAnalyzer:
     def _analyze_network_robustness(self, G: nx.Graph, metrics: NetworkMetrics) -> NetworkMetrics:
         """
         Analyze network robustness to node/edge removal
-        
-        Parameters:
-        -----------
-        G : nx.Graph
-            Network graph
-        metrics : NetworkMetrics
-            Network metrics object to update
-            
-        Returns:
-        --------
-        NetworkMetrics : Updated metrics with robustness information
         """
         try:
             print("Analyzing network robustness...")
@@ -1796,80 +1904,113 @@ class NetworkAnalyzer:
                 'critical_edges': []
             }
             
+            n_nodes = len(G.nodes())
+            n_edges = len(G.edges())
+            
             # Giant component size
             if nx.is_connected(G):
                 robustness_metrics['giant_component_size'] = 1.0
             else:
                 components = list(nx.connected_components(G))
                 largest_component_size = max(len(comp) for comp in components) if components else 0
-                robustness_metrics['giant_component_size'] = largest_component_size / len(G.nodes()) if G.nodes() else 0.0
+                robustness_metrics['giant_component_size'] = largest_component_size / n_nodes if n_nodes > 0 else 0.0
             
             # Node attack robustness (remove highest centrality nodes)
-            if metrics.betweenness_centrality and len(G.nodes()) > 5:
+            if metrics.betweenness_centrality and n_nodes > 10:  # Only test if network is large enough
                 G_test = G.copy()
                 high_centrality_nodes = sorted(metrics.betweenness_centrality.items(), 
                                              key=lambda x: x[1], reverse=True)
                 
-                connectivity_loss = []
+                connectivity_sizes = []
                 nodes_removed = 0
-                max_removals = min(10, len(G.nodes()) // 4)  # Remove up to 25% or 10 nodes
+                # Remove more nodes for realistic testing
+                max_removals = min(20, max(5, n_nodes // 3))  # Remove up to 1/3 or at least 5
                 
                 for node, _ in high_centrality_nodes[:max_removals]:
-                    G_test.remove_node(node)
-                    nodes_removed += 1
-                    
-                    if nx.is_connected(G_test):
-                        connectivity_loss.append(0)  # Still connected
-                    else:
-                        components = list(nx.connected_components(G_test))
-                        largest_comp = max(len(comp) for comp in components) if components else 0
-                        loss = 1.0 - (largest_comp / len(G.nodes()))
-                        connectivity_loss.append(loss)
+                    if node in G_test:
+                        G_test.remove_node(node)
+                        nodes_removed += 1
                         
-                        if loss > 0.5 and robustness_metrics['fragmentation_point'] is None:
+                        # Measure largest connected component
+                        if nx.is_connected(G_test):
+                            largest_comp_size = len(G_test.nodes())
+                        else:
+                            components = list(nx.connected_components(G_test))
+                            largest_comp_size = max(len(comp) for comp in components) if components else 0
+                        
+                        # Record relative size of largest component
+                        relative_size = largest_comp_size / n_nodes if n_nodes > 0 else 0
+                        connectivity_sizes.append(relative_size)
+                        
+                        # Record fragmentation point (when largest component < 50% of original)
+                        if relative_size < 0.5 and robustness_metrics['fragmentation_point'] is None:
                             robustness_metrics['fragmentation_point'] = nodes_removed
                 
-                robustness_metrics['node_attack_robustness'] = 1.0 - np.mean(connectivity_loss) if connectivity_loss else 1.0
+                # Robustness = average fraction of network that remains connected
+                robustness_metrics['node_attack_robustness'] = np.mean(connectivity_sizes) if connectivity_sizes else 1.0
                 robustness_metrics['critical_nodes'] = [node for node, _ in high_centrality_nodes[:5]]
+            else:
+                print(f"Skipping node attack analysis: network too small ({n_nodes} nodes)")
+                robustness_metrics['node_attack_robustness'] = 1.0  # Small networks are trivially robust
             
-            # Random failure robustness (simplified)
-            if len(G.nodes()) > 10:
+            # Random failure robustness
+            if n_nodes > 10:
                 nodes = list(G.nodes())
-                random_nodes = np.random.choice(nodes, min(5, len(nodes) // 5), replace=False)
+                n_random_removals = min(10, max(3, n_nodes // 5))  # Remove up to 20% or at least 3
+                random_nodes = np.random.choice(nodes, n_random_removals, replace=False)
                 
                 G_random = G.copy()
                 for node in random_nodes:
-                    G_random.remove_node(node)
+                    if node in G_random:
+                        G_random.remove_node(node)
                 
                 if nx.is_connected(G_random):
                     robustness_metrics['random_failure_robustness'] = 1.0
                 else:
                     components = list(nx.connected_components(G_random))
                     largest_comp = max(len(comp) for comp in components) if components else 0
-                    robustness_metrics['random_failure_robustness'] = largest_comp / len(G.nodes()) if G.nodes() else 0.0
+                    robustness_metrics['random_failure_robustness'] = largest_comp / n_nodes if n_nodes > 0 else 0.0
+            else:
+                robustness_metrics['random_failure_robustness'] = 1.0
             
             # Edge attack robustness (remove high-betweenness edges)
-            edge_betweenness = nx.edge_betweenness_centrality(G, weight='weight', k=min(50, len(G.nodes())))
-            if edge_betweenness:
-                high_bet_edges = sorted(edge_betweenness.items(), key=lambda x: x[1], reverse=True)[:5]
-                robustness_metrics['critical_edges'] = [edge for edge, _ in high_bet_edges]
-                
-                G_edge_test = G.copy()
-                for edge, _ in high_bet_edges[:3]:  # Remove top 3 edges
-                    if G_edge_test.has_edge(*edge):
-                        G_edge_test.remove_edge(*edge)
-                
-                if nx.is_connected(G_edge_test):
+            if n_edges > 10:
+                try:
+                    # Use smaller sample for edge betweenness (computationally expensive)
+                    sample_size = min(100, n_nodes)
+                    edge_betweenness = nx.edge_betweenness_centrality(G, weight='weight', k=sample_size)
+                    
+                    if edge_betweenness:
+                        high_bet_edges = sorted(edge_betweenness.items(), key=lambda x: x[1], reverse=True)
+                        n_edges_to_remove = min(10, max(3, n_edges // 5))  # Remove up to 20% or at least 3
+                        robustness_metrics['critical_edges'] = [edge for edge, _ in high_bet_edges[:5]]
+                        
+                        G_edge_test = G.copy()
+                        edges_removed = 0
+                        for edge, _ in high_bet_edges[:n_edges_to_remove]:
+                            if G_edge_test.has_edge(*edge):
+                                G_edge_test.remove_edge(*edge)
+                                edges_removed += 1
+                        
+                        if nx.is_connected(G_edge_test):
+                            robustness_metrics['edge_attack_robustness'] = 1.0
+                        else:
+                            components = list(nx.connected_components(G_edge_test))
+                            largest_comp = max(len(comp) for comp in components) if components else 0
+                            robustness_metrics['edge_attack_robustness'] = largest_comp / n_nodes if n_nodes > 0 else 0.0
+                    else:
+                        robustness_metrics['edge_attack_robustness'] = 1.0
+                except Exception as e:
+                    print(f"Edge betweenness calculation failed: {e}")
                     robustness_metrics['edge_attack_robustness'] = 1.0
-                else:
-                    components = list(nx.connected_components(G_edge_test))
-                    largest_comp = max(len(comp) for comp in components) if components else 0
-                    robustness_metrics['edge_attack_robustness'] = largest_comp / len(G.nodes()) if G.nodes() else 0.0
+            else:
+                robustness_metrics['edge_attack_robustness'] = 1.0
             
             metrics.network_robustness = robustness_metrics
             print(f"Network robustness analysis complete: "
                   f"node_attack={robustness_metrics['node_attack_robustness']:.3f}, "
-                  f"giant_component={robustness_metrics['giant_component_size']:.3f}")
+                  f"random_failure={robustness_metrics['random_failure_robustness']:.3f}, "
+                  f"edge_attack={robustness_metrics['edge_attack_robustness']:.3f}")
             
         except Exception as e:
             print(f"Network robustness analysis failed: {e}")
@@ -1880,17 +2021,6 @@ class NetworkAnalyzer:
     def _compute_centrality_significance(self, G: nx.Graph, metrics: NetworkMetrics) -> NetworkMetrics:
         """
         Compute statistical significance of centrality measures using z-scores
-        
-        Parameters:
-        -----------
-        G : nx.Graph
-            Network graph
-        metrics : NetworkMetrics
-            Network metrics object to update
-            
-        Returns:
-        --------
-        NetworkMetrics : Updated metrics with centrality significance scores
         """
         try:
             print("Computing centrality significance scores...")
@@ -1904,42 +2034,46 @@ class NetworkAnalyzer:
             
             # Calculate z-scores for each centrality measure
             centrality_measures = {
-                'betweenness': metrics.betweenness_centrality or {},
-                'closeness': metrics.closeness_centrality or {},
-                'degree': metrics.degree_centrality or {},
-                'eigenvector': metrics.eigenvector_centrality or {}
+                'betweenness': metrics.betweenness_centrality,
+                'closeness': metrics.closeness_centrality,
+                'degree': metrics.degree_centrality,
+                'eigenvector': metrics.eigenvector_centrality
             }
             
-            for measure_name, centrality_dict in centrality_measures.items():
-                if centrality_dict:
-                    values = list(centrality_dict.values())
-                    
-                    if len(values) > 1:
-                        mean_val = np.mean(values)
-                        std_val = np.std(values)
-                        
-                        if std_val > 0:
-                            for node, value in centrality_dict.items():
-                                z_score = (value - mean_val) / std_val
-                                z_scores[f"{measure_name}_z"][node] = z_score
-            
-            # Identify statistically significant nodes (|z| > 2)
             significant_nodes = {
                 'highly_significant': set(),  # |z| > 2.5
                 'significant': set(),         # 1.96 < |z| <= 2.5
                 'notable': set()             # 1.0 < |z| <= 1.96
             }
             
-            for measure_name, z_dict in z_scores.items():
-                for node, z_score in z_dict.items():
-                    abs_z = abs(z_score)
+            for measure_name, centrality_dict in centrality_measures.items():
+                if centrality_dict and len(centrality_dict) > 1:
+                    values = list(centrality_dict.values())
                     
-                    if abs_z > 2.5:
-                        significant_nodes['highly_significant'].add(node)
-                    elif abs_z > 1.96:
-                        significant_nodes['significant'].add(node)
-                    elif abs_z > 1.0:
-                        significant_nodes['notable'].add(node)
+                    # Only compute z-scores if we have variance
+                    if len(set(values)) > 1:  # Check for non-constant values
+                        mean_val = np.mean(values)
+                        std_val = np.std(values, ddof=1)  # Sample standard deviation
+                        
+                        if std_val > 1e-10:  # Avoid division by zero
+                            for node, value in centrality_dict.items():
+                                z_score = (value - mean_val) / std_val
+                                z_scores[f"{measure_name}_z"][node] = z_score
+                                
+                                # Categorize by significance level
+                                abs_z = abs(z_score)
+                                if abs_z > 2.5:
+                                    significant_nodes['highly_significant'].add(node)
+                                elif abs_z > 1.96:
+                                    significant_nodes['significant'].add(node)
+                                elif abs_z > 1.0:
+                                    significant_nodes['notable'].add(node)
+                        else:
+                            print(f"Warning: {measure_name} centrality has zero variance")
+                    else:
+                        print(f"Warning: {measure_name} centrality has constant values")
+                else:
+                    print(f"Warning: {measure_name} centrality is empty or has insufficient data")
             
             # Add significance categories to z_scores
             z_scores['significant_nodes'] = {
@@ -1959,11 +2093,15 @@ class NetworkAnalyzer:
             metrics.centrality_z_scores = z_scores
             
             total_sig = z_scores['summary']['total_significant']
-            print(f"Centrality significance analysis complete: {total_sig} statistically significant nodes")
+            total_nodes = len(G.nodes()) if G.nodes() else 0
+            print(f"Centrality significance analysis complete: {total_sig}/{total_nodes} statistically significant nodes")
             
         except Exception as e:
             print(f"Centrality significance analysis failed: {e}")
-            metrics.centrality_z_scores = {'error': str(e)}
+            metrics.centrality_z_scores = {
+                'error': str(e),
+                'summary': {'n_highly_significant': 0, 'n_significant': 0, 'n_notable': 0, 'total_significant': 0}
+            }
         
         return metrics
     
@@ -1976,14 +2114,14 @@ class NetworkAnalyzer:
                     sample_nodes = np.random.choice(list(G.nodes()), min(50, len(G.nodes())), replace=False)
                     sample_lengths = []
                     for node in sample_nodes:
-                        lengths = nx.single_source_shortest_path_length(G, node, weight='weight')
+                        lengths = self._safe_shortest_path_length(G, node)
                         sample_lengths.extend([l for l in lengths.values() if l > 0])
                     
                     metrics.average_path_length = np.mean(sample_lengths) if sample_lengths else 0
                     metrics.diameter = max(sample_lengths) if sample_lengths else 0
                 else:
-                    metrics.average_path_length = nx.average_shortest_path_length(G, weight='weight')
-                    metrics.diameter = nx.diameter(G)
+                    metrics.average_path_length = self._safe_average_shortest_path_length(G)
+                    metrics.diameter = self._safe_diameter(G)
             else:
                 # Disconnected network - analyze largest component
                 components = list(nx.connected_components(G))
@@ -1991,8 +2129,8 @@ class NetworkAnalyzer:
                     largest_cc = max(components, key=len)
                     G_cc = G.subgraph(largest_cc)
                     if len(G_cc) > 1:
-                        metrics.average_path_length = nx.average_shortest_path_length(G_cc, weight='weight')
-                        metrics.diameter = nx.diameter(G_cc)
+                        metrics.average_path_length = self._safe_average_shortest_path_length(G_cc)
+                        metrics.diameter = self._safe_diameter(G_cc)
         except Exception:
             metrics.average_path_length = float('inf')
             metrics.diameter = float('inf')
@@ -2393,7 +2531,7 @@ class OutputManager:
     
     def _save_system_info(self, simulation: MDSimulation, prefix: str):
         """Save system information"""
-        with open(self.output_dir / f"{prefix}_system_info.txt", 'w') as f:
+        with open(self.output_dir / f"{prefix}_system_info.txt", 'w', encoding='utf-8') as f:
             summary = simulation.get_system_summary()
             f.write(f"MD Simulation Analysis: {simulation.name}\n")
             f.write("=" * 50 + "\n\n")
@@ -2443,7 +2581,7 @@ class OutputManager:
                 np.save(self.output_dir / f"{prefix}_principal_components.npy", dynamic_data['principal_components'])
             
             # Save PCA summary
-            with open(self.output_dir / f"{prefix}_pca_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_pca_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Principal Component Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 f.write(f"Number of components: {dynamic_data.get('pca_n_components', 'N/A')}\n")
@@ -2472,7 +2610,7 @@ class OutputManager:
             np.save(self.output_dir / f"{prefix}_landscape_laplacian.npy", dynamic_data['landscape_laplacian'])
             
             # Save landscape summary
-            with open(self.output_dir / f"{prefix}_landscape_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_landscape_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Energy Landscape Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 f.write(f"Temperature: {dynamic_data.get('landscape_temperature', 'N/A')} K\n")
@@ -2502,7 +2640,7 @@ class OutputManager:
             self._create_landscape_visualization(dynamic_data, prefix)
         
         # Save dynamic analysis summary
-        with open(self.output_dir / f"{prefix}_dynamic_summary.txt", 'w') as f:
+        with open(self.output_dir / f"{prefix}_dynamic_summary.txt", 'w', encoding='utf-8') as f:
             f.write("Dynamic Analysis Summary\n")
             f.write("=" * 30 + "\n")
             
@@ -2543,18 +2681,18 @@ class OutputManager:
         
         # Save community detection results
         if hasattr(metrics, 'communities_detailed') and metrics.communities_detailed:
-            with open(self.output_dir / f"{prefix}_community_analysis.json", 'w') as f:
+            with open(self.output_dir / f"{prefix}_community_analysis.json", 'w', encoding='utf-8') as f:
                 json.dump(metrics.communities_detailed, f, indent=2, default=str)
             
             # Save community assignments
             if hasattr(metrics, 'community_node_assignments') and metrics.community_node_assignments:
-                with open(self.output_dir / f"{prefix}_community_assignments.csv", 'w') as f:
+                with open(self.output_dir / f"{prefix}_community_assignments.csv", 'w', encoding='utf-8') as f:
                     f.write("node,community_id\n")
                     for node, comm_id in metrics.community_node_assignments.items():
                         f.write(f"{node},{comm_id}\n")
             
             # Save community summary
-            with open(self.output_dir / f"{prefix}_community_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_community_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Community Detection Analysis Summary\n")
                 f.write("=" * 45 + "\n")
                 f.write(f"Method: {metrics.communities_detailed.get('method', 'N/A')}\n")
@@ -2575,7 +2713,7 @@ class OutputManager:
             with open(self.output_dir / f"{prefix}_path_metrics.json", 'w') as f:
                 json.dump(metrics.path_metrics, f, indent=2, default=str)
             
-            with open(self.output_dir / f"{prefix}_path_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_path_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Path Analysis Summary\n")
                 f.write("=" * 25 + "\n")
                 pm = metrics.path_metrics
@@ -2590,7 +2728,7 @@ class OutputManager:
                 if critical_paths:
                     f.write(f"\nTop {min(5, len(critical_paths))} Critical Paths:\n")
                     for i, path_info in enumerate(critical_paths[:5]):
-                        f.write(f"  {i+1}. {path_info['source']} → {path_info['target']} "
+                        f.write(f"  {i+1}. {path_info['source']} -> {path_info['target']} "
                                f"(length: {path_info['length']:.2f})\n")
         
         # Save allosteric pathway analysis
@@ -2598,7 +2736,7 @@ class OutputManager:
             with open(self.output_dir / f"{prefix}_allosteric_analysis.json", 'w') as f:
                 json.dump(metrics.allosteric_pathways, f, indent=2, default=str)
             
-            with open(self.output_dir / f"{prefix}_allosteric_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_allosteric_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Allosteric Pathway Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 ap = metrics.allosteric_pathways
@@ -2639,7 +2777,7 @@ class OutputManager:
             
             # Save hotspots as CSV for easy analysis
             if hotspots:
-                with open(self.output_dir / f"{prefix}_allosteric_hotspots.csv", 'w') as f:
+                with open(self.output_dir / f"{prefix}_allosteric_hotspots.csv", 'w', encoding='utf-8') as f:
                     f.write("node,hotspot_score,frequency,pathway_count,avg_efficiency\n")
                     for hotspot in hotspots:
                         f.write(f"{hotspot['node']},{hotspot['hotspot_score']:.4f},"
@@ -2651,7 +2789,7 @@ class OutputManager:
             with open(self.output_dir / f"{prefix}_robustness_analysis.json", 'w') as f:
                 json.dump(metrics.network_robustness, f, indent=2, default=str)
             
-            with open(self.output_dir / f"{prefix}_robustness_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_robustness_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Network Robustness Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 nr = metrics.network_robustness
@@ -2680,7 +2818,7 @@ class OutputManager:
             # Save significant nodes CSV
             sig_nodes = metrics.centrality_z_scores.get('significant_nodes', {})
             if any(sig_nodes.values()):
-                with open(self.output_dir / f"{prefix}_significant_nodes.csv", 'w') as f:
+                with open(self.output_dir / f"{prefix}_significant_nodes.csv", 'w', encoding='utf-8') as f:
                     f.write("node,significance_level,betweenness_z,closeness_z,degree_z,eigenvector_z\n")
                     
                     all_z_scores = {
@@ -2703,7 +2841,7 @@ class OutputManager:
                         f.write(f"{node},significant,{','.join(f'{z:.3f}' for z in z_vals)}\n")
             
             # Save significance summary
-            with open(self.output_dir / f"{prefix}_significance_summary.txt", 'w') as f:
+            with open(self.output_dir / f"{prefix}_significance_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Centrality Significance Analysis Summary\n")
                 f.write("=" * 45 + "\n")
                 
@@ -2987,53 +3125,123 @@ class OutputManager:
             ax2 = plt.subplot(3, 3, 2) 
             if hasattr(metrics, 'centrality_z_scores') and metrics.centrality_z_scores:
                 summary = metrics.centrality_z_scores.get('summary', {})
-                categories = ['Highly Sig.', 'Significant', 'Notable']
-                counts = [summary.get('n_highly_significant', 0), 
-                         summary.get('n_significant', 0),
-                         summary.get('n_notable', 0)]
-                
-                colors = ['red', 'orange', 'yellow']
-                ax2.bar(categories, counts, color=colors, alpha=0.7)
-                ax2.set_ylabel('Number of Nodes')
+                if summary:  # Check if summary has data
+                    categories = ['Highly Sig.\n(|z|>2.5)', 'Significant\n(|z|>1.96)', 'Notable\n(|z|>1.0)']
+                    counts = [summary.get('n_highly_significant', 0), 
+                             summary.get('n_significant', 0),
+                             summary.get('n_notable', 0)]
+                    
+                    colors = ['red', 'orange', 'yellow']
+                    bars = ax2.bar(categories, counts, color=colors, alpha=0.7)
+                    ax2.set_ylabel('Number of Nodes')
+                    ax2.set_title('Centrality Significance')
+                    ax2.grid(True, alpha=0.3)
+                    
+                    # Add value labels on bars
+                    for bar, count in zip(bars, counts):
+                        if count > 0:
+                            height = bar.get_height()
+                            ax2.text(bar.get_x() + bar.get_width()/2., height + 0.05,
+                                    f'{int(count)}', ha='center', va='bottom', fontsize=10)
+                    
+                    # Set y-axis to start from 0
+                    ax2.set_ylim(0, max(counts) + 1 if max(counts) > 0 else 1)
+                else:
+                    ax2.text(0.5, 0.5, 'No significance\ndata available', 
+                            transform=ax2.transAxes, ha='center', va='center',
+                            fontsize=10, bbox=dict(boxstyle='round', facecolor='lightgray'))
+                    ax2.set_title('Centrality Significance')
+            else:
+                ax2.text(0.5, 0.5, 'Centrality significance\nanalysis failed', 
+                        transform=ax2.transAxes, ha='center', va='center',
+                        fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcoral'))
                 ax2.set_title('Centrality Significance')
-                ax2.grid(True, alpha=0.3)
             
             # 3. Path length distribution
             ax3 = plt.subplot(3, 3, 3)
             if hasattr(metrics, 'path_metrics') and metrics.path_metrics:
                 path_dist = metrics.path_metrics.get('path_length_distribution', {})
-                if path_dist and 'lengths' in path_dist:
+                if path_dist and 'lengths' in path_dist and 'counts' in path_dist:
                     lengths = path_dist['lengths']
                     counts = path_dist['counts']
-                    ax3.bar(lengths, counts, alpha=0.7)
-                    ax3.set_xlabel('Path Length')
-                    ax3.set_ylabel('Frequency')
+                    
+                    if len(lengths) > 0 and len(counts) > 0 and len(lengths) == len(counts):
+                        bars = ax3.bar(lengths, counts, alpha=0.7, color='skyblue')
+                        ax3.set_xlabel('Path Length (hops)')
+                        ax3.set_ylabel('Frequency')
+                        ax3.set_title('Path Length Distribution')
+                        ax3.grid(True, alpha=0.3)
+                        
+                        # Add statistics text
+                        if 'mean' in path_dist and 'std' in path_dist:
+                            stats_text = f"mean={path_dist['mean']:.2f}\nstd={path_dist['std']:.2f}"
+                            ax3.text(0.95, 0.95, stats_text, transform=ax3.transAxes, 
+                                    ha='right', va='top', fontsize=8,
+                                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+                        
+                        # Set integer x-ticks for path lengths
+                        ax3.set_xticks(lengths)
+                        ax3.set_xlim(min(lengths)-0.5, max(lengths)+0.5)
+                    else:
+                        ax3.text(0.5, 0.5, f'Invalid path data\nlengths: {len(lengths)}, counts: {len(counts)}', 
+                                transform=ax3.transAxes, ha='center', va='center',
+                                fontsize=10, bbox=dict(boxstyle='round', facecolor='lightyellow'))
+                        ax3.set_title('Path Length Distribution')
+                elif 'error' in metrics.path_metrics:
+                    ax3.text(0.5, 0.5, f'Path analysis failed:\n{metrics.path_metrics["error"][:50]}...', 
+                            transform=ax3.transAxes, ha='center', va='center',
+                            fontsize=9, bbox=dict(boxstyle='round', facecolor='lightcoral'))
                     ax3.set_title('Path Length Distribution')
-                    ax3.grid(True, alpha=0.3)
+                else:
+                    ax3.text(0.5, 0.5, 'No path length\ndistribution data', 
+                            transform=ax3.transAxes, ha='center', va='center',
+                            fontsize=10, bbox=dict(boxstyle='round', facecolor='lightgray'))
+                    ax3.set_title('Path Length Distribution')
+            else:
+                ax3.text(0.5, 0.5, 'Path analysis\nnot available', 
+                        transform=ax3.transAxes, ha='center', va='center',
+                        fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcoral'))
+                ax3.set_title('Path Length Distribution')
             
             # 4. Network robustness
             ax4 = plt.subplot(3, 3, 4)
             if hasattr(metrics, 'network_robustness') and metrics.network_robustness:
                 nr = metrics.network_robustness
-                robustness_measures = ['Node Attack', 'Random Failure', 'Edge Attack']
-                robustness_values = [
-                    nr.get('node_attack_robustness', 0),
-                    nr.get('random_failure_robustness', 0),
-                    nr.get('edge_attack_robustness', 0)
-                ]
-                
-                bars = ax4.bar(robustness_measures, robustness_values, 
-                              color=['red', 'blue', 'green'], alpha=0.7)
-                ax4.set_ylabel('Robustness Score')
+                if 'error' not in nr:
+                    robustness_measures = ['Node\nAttack', 'Random\nFailure', 'Edge\nAttack']
+                    robustness_values = [
+                        nr.get('node_attack_robustness', 0),
+                        nr.get('random_failure_robustness', 0),
+                        nr.get('edge_attack_robustness', 0)
+                    ]
+                    
+                    bars = ax4.bar(robustness_measures, robustness_values, 
+                                  color=['red', 'blue', 'green'], alpha=0.7)
+                    ax4.set_ylabel('Robustness Score')
+                    ax4.set_title('Network Robustness')
+                    ax4.set_ylim(0, 1.05)
+                    ax4.grid(True, alpha=0.3)
+                    
+                    # Add value labels on bars
+                    for bar, value in zip(bars, robustness_values):
+                        height = bar.get_height()
+                        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                                f'{value:.3f}', ha='center', va='bottom', fontsize=9)
+                        
+                        # Add warning for perfect scores (likely too lenient)
+                        if value == 1.0:
+                            ax4.text(bar.get_x() + bar.get_width()/2., height - 0.05,
+                                    '⚠', ha='center', va='top', fontsize=12, color='orange')
+                else:
+                    ax4.text(0.5, 0.5, 'Robustness analysis\nfailed', 
+                            transform=ax4.transAxes, ha='center', va='center',
+                            fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcoral'))
+                    ax4.set_title('Network Robustness')
+            else:
+                ax4.text(0.5, 0.5, 'Robustness analysis\nnot available', 
+                        transform=ax4.transAxes, ha='center', va='center',
+                        fontsize=10, bbox=dict(boxstyle='round', facecolor='lightgray'))
                 ax4.set_title('Network Robustness')
-                ax4.set_ylim(0, 1)
-                ax4.grid(True, alpha=0.3)
-                
-                # Add value labels on bars
-                for bar, value in zip(bars, robustness_values):
-                    height = bar.get_height()
-                    ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                            f'{value:.3f}', ha='center', va='bottom')
             
             # 5. Allosteric hotspots
             ax5 = plt.subplot(3, 3, 5)
@@ -3043,30 +3251,83 @@ class OutputManager:
                     top_hotspots = hotspots[:10]  # Top 10
                     nodes = [h['node'] for h in top_hotspots]
                     scores = [h['hotspot_score'] for h in top_hotspots]
+                    frequencies = [h['frequency'] for h in top_hotspots]
                     
-                    ax5.barh(range(len(nodes)), scores)
+                    # Create horizontal bar chart
+                    bars = ax5.barh(range(len(nodes)), scores, alpha=0.7)
                     ax5.set_yticks(range(len(nodes)))
                     ax5.set_yticklabels(nodes, fontsize=8)
-                    ax5.set_xlabel('Hotspot Score')
+                    ax5.set_xlabel('Hotspot Score (freq × efficiency)')
                     ax5.set_title('Top Allosteric Hotspots')
                     ax5.grid(True, alpha=0.3)
+                    
+                    # Add frequency labels on bars
+                    for i, (bar, score, freq) in enumerate(zip(bars, scores, frequencies)):
+                        width = bar.get_width()
+                        ax5.text(width + max(scores)*0.01, bar.get_y() + bar.get_height()/2,
+                                f'f={freq}', ha='left', va='center', fontsize=7, alpha=0.8)
+                    
+                    # Set x-axis limits with some padding
+                    ax5.set_xlim(0, max(scores) * 1.15)
+                else:
+                    ax5.text(0.5, 0.5, 'No allosteric\nhotspots found', 
+                            transform=ax5.transAxes, ha='center', va='center',
+                            fontsize=10, bbox=dict(boxstyle='round', facecolor='lightgray'))
+                    ax5.set_title('Top Allosteric Hotspots')
+            else:
+                ax5.text(0.5, 0.5, 'Allosteric analysis\nnot available', 
+                        transform=ax5.transAxes, ha='center', va='center',
+                        fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcoral'))
+                ax5.set_title('Top Allosteric Hotspots')
             
             # 6. Communication efficiency heatmap
             ax6 = plt.subplot(3, 3, 6)
             if hasattr(metrics, 'allosteric_pathways') and metrics.allosteric_pathways:
                 comm_eff = metrics.allosteric_pathways.get('communication_efficiency', {})
                 if comm_eff and len(comm_eff) > 1:
-                    # Create a small efficiency matrix for top pairs
-                    top_pairs = sorted(comm_eff.items(), key=lambda x: x[1], reverse=True)[:25]
-                    
-                    # Extract unique nodes
+                    # Strategy: Get top nodes from both chains to ensure representation
                     all_nodes = set()
-                    for pair_key, _ in top_pairs:
+                    
+                    # Extract all nodes from pathways
+                    for pair_key, eff in comm_eff.items():
                         source, target = pair_key.split('_to_')
                         all_nodes.add(source)
                         all_nodes.add(target)
                     
-                    nodes_list = sorted(list(all_nodes))[:10]  # Limit to 10 nodes
+                    # Separate by chain and get top nodes from each
+                    chain_a_nodes = sorted([n for n in all_nodes if n.startswith('A_')])
+                    chain_b_nodes = sorted([n for n in all_nodes if n.startswith('B_')])
+                    other_nodes = sorted([n for n in all_nodes if not (n.startswith('A_') or n.startswith('B_'))])
+                    
+                    # Select balanced representation: top nodes from each chain
+                    nodes_list = []
+                    
+                    # Add top nodes from each chain (up to 4 each)
+                    if chain_a_nodes:
+                        # Get efficiency scores for chain A nodes
+                        a_scores = {}
+                        for node in chain_a_nodes:
+                            scores = [eff for key, eff in comm_eff.items() if node in key]
+                            a_scores[node] = max(scores) if scores else 0.0
+                        
+                        top_a = sorted(a_scores.items(), key=lambda x: x[1], reverse=True)[:4]
+                        nodes_list.extend([node for node, _ in top_a])
+                    
+                    if chain_b_nodes:
+                        # Get efficiency scores for chain B nodes
+                        b_scores = {}
+                        for node in chain_b_nodes:
+                            scores = [eff for key, eff in comm_eff.items() if node in key]
+                            b_scores[node] = max(scores) if scores else 0.0
+                        
+                        top_b = sorted(b_scores.items(), key=lambda x: x[1], reverse=True)[:4]
+                        nodes_list.extend([node for node, _ in top_b])
+                    
+                    # Add other nodes if any
+                    nodes_list.extend(other_nodes[:2])
+                    
+                    # Limit total to 10 nodes and sort for consistent ordering
+                    nodes_list = sorted(list(set(nodes_list)))[:10]
                     
                     if len(nodes_list) >= 2:
                         # Create efficiency matrix
@@ -3074,18 +3335,43 @@ class OutputManager:
                         
                         for i, source in enumerate(nodes_list):
                             for j, target in enumerate(nodes_list):
-                                key1 = f"{source}_to_{target}"
-                                key2 = f"{target}_to_{source}"
-                                eff = comm_eff.get(key1, comm_eff.get(key2, 0))
-                                eff_matrix[i, j] = eff
+                                if i == j:
+                                    eff_matrix[i, j] = 1.0  # Self-efficiency = 1
+                                else:
+                                    key1 = f"{source}_to_{target}"
+                                    key2 = f"{target}_to_{source}"
+                                    eff = comm_eff.get(key1, comm_eff.get(key2, 0))
+                                    eff_matrix[i, j] = eff
                         
-                        im = ax6.imshow(eff_matrix, cmap='viridis', aspect='auto')
+                        im = ax6.imshow(eff_matrix, cmap='viridis', aspect='auto', vmin=0, vmax=1)
                         ax6.set_xticks(range(len(nodes_list)))
                         ax6.set_yticks(range(len(nodes_list)))
                         ax6.set_xticklabels(nodes_list, rotation=45, fontsize=8)
                         ax6.set_yticklabels(nodes_list, fontsize=8)
+                        ax6.set_title('Communication Efficiency\n(Both Chains)')
+                        
+                        # Add colorbar
+                        cbar = plt.colorbar(im, ax=ax6, shrink=0.8)
+                        cbar.set_label('Efficiency', fontsize=8)
+                        
+                        # Add chain labels
+                        ax6.text(-0.02, 0.5, 'Chain A/B', transform=ax6.transAxes, 
+                                rotation=90, ha='center', va='center', fontsize=9)
+                    else:
+                        ax6.text(0.5, 0.5, f'Insufficient nodes\nfor heatmap\n({len(nodes_list)} nodes)', 
+                                transform=ax6.transAxes, ha='center', va='center',
+                                fontsize=10, bbox=dict(boxstyle='round', facecolor='lightgray'))
                         ax6.set_title('Communication Efficiency')
-                        plt.colorbar(im, ax=ax6, shrink=0.8)
+                else:
+                    ax6.text(0.5, 0.5, 'No communication\nefficiency data', 
+                            transform=ax6.transAxes, ha='center', va='center',
+                            fontsize=10, bbox=dict(boxstyle='round', facecolor='lightgray'))
+                    ax6.set_title('Communication Efficiency')
+            else:
+                ax6.text(0.5, 0.5, 'Allosteric analysis\nnot available', 
+                        transform=ax6.transAxes, ha='center', va='center',
+                        fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcoral'))
+                ax6.set_title('Communication Efficiency')
             
             # 7. Centrality correlation plot
             ax7 = plt.subplot(3, 3, 7)
