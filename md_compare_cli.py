@@ -60,7 +60,18 @@ def create_analysis_config_from_args(args) -> AnalysisConfig:
         compute_paths=getattr(args, 'compute_paths', True),
         allosteric_analysis=getattr(args, 'allosteric_analysis', True),
         allosteric_source_nodes=getattr(args, 'allosteric_sources', None),
-        allosteric_target_nodes=getattr(args, 'allosteric_targets', None)
+        allosteric_target_nodes=getattr(args, 'allosteric_targets', None),
+        # PyEMMA MSM options
+        compute_msm=getattr(args, 'compute_msm', True),
+        msm_lag_time=getattr(args, 'msm_lag_time', 10),
+        msm_n_clusters=getattr(args, 'msm_clusters', 100),
+        msm_stride=getattr(args, 'msm_stride', 1),
+        msm_feature_type=getattr(args, 'msm_features', 'distances'),
+        msm_clustering_method=getattr(args, 'msm_clustering', 'kmeans'),
+        compute_kinetics=getattr(args, 'compute_kinetics', True),
+        kinetic_timescales_count=getattr(args, 'kinetic_timescales', 5),
+        compute_metastable_states=getattr(args, 'compute_metastable_states', True),
+        metastable_state_count=getattr(args, 'metastable_states', 5)
     )
 
 
@@ -435,6 +446,31 @@ For more information, visit: https://github.com/yourusername/md-compare
                               help='Specific residues to use as allosteric sources (e.g., A_50 B_50)')
     single_parser.add_argument('--allosteric-targets', nargs='+',
                               help='Specific residues to use as allosteric targets (e.g., A_25 B_25)')
+    # PyEMMA Markov State Model options
+    single_parser.add_argument('--compute-msm', dest='compute_msm', action='store_true', default=True,
+                              help='Compute Markov State Model analysis (default: enabled)')
+    single_parser.add_argument('--no-msm', dest='compute_msm', action='store_false',
+                              help='Skip Markov State Model analysis')
+    single_parser.add_argument('--msm-lag-time', type=int, default=10,
+                              help='Lag time for MSM construction in frames (default: 10)')
+    single_parser.add_argument('--msm-clusters', type=int, default=100,
+                              help='Number of clusters for MSM discretization (default: 100)')
+    single_parser.add_argument('--msm-stride', type=int, default=1,
+                              help='Stride for coordinate extraction (default: 1)')
+    single_parser.add_argument('--msm-features', default='distances',
+                              choices=['distances', 'coordinates', 'angles', 'dihedrals'],
+                              help='Feature type for MSM (default: distances)')
+    single_parser.add_argument('--msm-clustering', default='kmeans',
+                              choices=['kmeans', 'minibatch_kmeans', 'regular_space'],
+                              help='Clustering method for MSM (default: kmeans)')
+    single_parser.add_argument('--no-kinetics', dest='compute_kinetics', action='store_false',
+                              help='Skip kinetic analysis')
+    single_parser.add_argument('--kinetic-timescales', type=int, default=5,
+                              help='Number of kinetic timescales to compute (default: 5)')
+    single_parser.add_argument('--no-metastable', dest='compute_metastable_states', action='store_false',
+                              help='Skip metastable state analysis')
+    single_parser.add_argument('--metastable-states', type=int, default=5,
+                              help='Number of metastable states for PCCA+ (default: 5)')
     
     # Multiple simulation comparison
     compare_parser = subparsers.add_parser(
@@ -498,6 +534,31 @@ For more information, visit: https://github.com/yourusername/md-compare
                                help='Specific residues to use as allosteric sources (e.g., A_50 B_50)')
     compare_parser.add_argument('--allosteric-targets', nargs='+',
                                help='Specific residues to use as allosteric targets (e.g., A_25 B_25)')
+    # PyEMMA options (same as single)
+    compare_parser.add_argument('--compute-msm', dest='compute_msm', action='store_true', default=True,
+                               help='Compute Markov State Model analysis (default: enabled)')
+    compare_parser.add_argument('--no-msm', dest='compute_msm', action='store_false',
+                               help='Skip Markov State Model analysis')
+    compare_parser.add_argument('--msm-lag-time', type=int, default=10,
+                               help='Lag time for MSM construction in frames (default: 10)')
+    compare_parser.add_argument('--msm-clusters', type=int, default=100,
+                               help='Number of clusters for MSM discretization (default: 100)')
+    compare_parser.add_argument('--msm-stride', type=int, default=1,
+                               help='Stride for coordinate extraction (default: 1)')
+    compare_parser.add_argument('--msm-features', default='distances',
+                               choices=['distances', 'coordinates', 'angles', 'dihedrals'],
+                               help='Feature type for MSM (default: distances)')
+    compare_parser.add_argument('--msm-clustering', default='kmeans',
+                               choices=['kmeans', 'minibatch_kmeans', 'regular_space'],
+                               help='Clustering method for MSM (default: kmeans)')
+    compare_parser.add_argument('--no-kinetics', dest='compute_kinetics', action='store_false',
+                               help='Skip kinetic analysis')
+    compare_parser.add_argument('--kinetic-timescales', type=int, default=5,
+                               help='Number of kinetic timescales to compute (default: 5)')
+    compare_parser.add_argument('--no-metastable', dest='compute_metastable_states', action='store_false',
+                               help='Skip metastable state analysis')
+    compare_parser.add_argument('--metastable-states', type=int, default=5,
+                               help='Number of metastable states for PCCA+ (default: 5)')
     
     # Differential analysis
     diff_parser = subparsers.add_parser(
@@ -575,6 +636,31 @@ For more information, visit: https://github.com/yourusername/md-compare
                             help='Specific residues to use as allosteric sources (e.g., A_50 B_50)')
     diff_parser.add_argument('--allosteric-targets', nargs='+',
                             help='Specific residues to use as allosteric targets (e.g., A_25 B_25)')
+    # PyEMMA options (same as others)
+    diff_parser.add_argument('--compute-msm', dest='compute_msm', action='store_true', default=True,
+                            help='Compute Markov State Model analysis (default: enabled)')
+    diff_parser.add_argument('--no-msm', dest='compute_msm', action='store_false',
+                            help='Skip Markov State Model analysis')
+    diff_parser.add_argument('--msm-lag-time', type=int, default=10,
+                            help='Lag time for MSM construction in frames (default: 10)')
+    diff_parser.add_argument('--msm-clusters', type=int, default=100,
+                            help='Number of clusters for MSM discretization (default: 100)')
+    diff_parser.add_argument('--msm-stride', type=int, default=1,
+                            help='Stride for coordinate extraction (default: 1)')
+    diff_parser.add_argument('--msm-features', default='distances',
+                            choices=['distances', 'coordinates', 'angles', 'dihedrals'],
+                            help='Feature type for MSM (default: distances)')
+    diff_parser.add_argument('--msm-clustering', default='kmeans',
+                            choices=['kmeans', 'minibatch_kmeans', 'regular_space'],
+                            help='Clustering method for MSM (default: kmeans)')
+    diff_parser.add_argument('--no-kinetics', dest='compute_kinetics', action='store_false',
+                            help='Skip kinetic analysis')
+    diff_parser.add_argument('--kinetic-timescales', type=int, default=5,
+                            help='Number of kinetic timescales to compute (default: 5)')
+    diff_parser.add_argument('--no-metastable', dest='compute_metastable_states', action='store_false',
+                            help='Skip metastable state analysis')
+    diff_parser.add_argument('--metastable-states', type=int, default=5,
+                            help='Number of metastable states for PCCA+ (default: 5)')
     
     # Example configuration generator
     example_parser = subparsers.add_parser(
