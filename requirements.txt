@@ -1,65 +1,125 @@
-# Core dependencies for MD-Compare: Molecular Dynamics Simulation Comparison Toolkit
+# MD-Compare v1.4.0: Comprehensive Protein Dynamics Analysis Platform
 # Install with: pip install -r requirements.txt
+
+# =====================================================
+# CORE DEPENDENCIES (Required for basic functionality)
+# =====================================================
 
 # Molecular dynamics analysis
 MDAnalysis>=2.4.0
 MDAnalysisTests>=2.4.0
 
-# Network analysis
+# Network analysis and graph theory
 networkx>=2.8
 
-# Numerical computing
-numpy>=1.21.0
+# Numerical computing (PyEMMA compatibility)
+numpy>=1.21.0,<2.0
 scipy>=1.7.0
 
-# Visualization
+# Visualization and plotting
 matplotlib>=3.5.0
 seaborn>=0.11.0
 
 # Data manipulation and analysis
-pandas>=1.3.0          # For data manipulation and comparative analysis
-scikit-learn>=1.0.0    # For statistical analysis and clustering
+pandas>=1.3.0
+scikit-learn>=1.0.0
 
-# Progress monitoring and utilities
-tqdm>=4.62.0           # Progress bars for long computations
-jupyter>=1.0.0         # For interactive analysis notebooks
+# Progress monitoring
+tqdm>=4.62.0
 
-# For enhanced visualizations (optional)
-plotly>=5.0.0          # Interactive plots
-ipywidgets>=7.6.0      # Jupyter widgets
+# =====================================================
+# ADVANCED FEATURES (Optional but recommended)
+# =====================================================
 
-# For network visualization (optional)
-# pygraphviz>=1.7        # Graph layout algorithms (requires graphviz system package)
+# Advanced community detection algorithms
+python-igraph>=0.10.0
+leidenalg>=0.9.0
 
-# Memory profiling (development)
-memory-profiler>=0.60.0  # Monitor memory usage
+# Markov State Model analysis (kinetic modeling)
+pyemma>=2.5.11
 
-# Testing (development)
-pytest>=6.0.0
-pytest-cov>=3.0.0
+# Interactive analysis
+jupyter>=1.0.0
+ipywidgets>=7.6.0
 
-# Documentation (development)  
-sphinx>=4.0.0
-sphinx-rtd-theme>=1.0.0
+# Enhanced visualizations
+plotly>=5.0.0
 
-# Code quality (development)
-flake8>=4.0.0
-black>=22.0.0
+# =====================================================
+# ALTERNATIVE MSM LIBRARIES (Optional)
+# =====================================================
 
-# Molecular file format support (optional)
-# Uncomment if working with additional formats
-# openmm>=7.7.0         # OpenMM format support
-# parmed>=3.4.0         # AMBER parameter files
-# rdkit>=2022.03.0      # Chemical informatics
+# Uncomment for alternative MSM implementations:
+# deeptime>=0.4.0         # PyEMMA successor (modern alternative)
+# msmbuilder>=3.8.0       # Alternative MSM library
 
-# System requirements notes:
-# - Python >= 3.8
-# - For Desmond support: ensure MDAnalysis can read .dtr files
-# - For graphviz: install system package (apt install graphviz, brew install graphviz, etc.)
-# - Recommended: conda environment for easier package management
-#
-# Installation example:
-# conda create -n md_compare python=3.9
-# conda activate md_compare
+# =====================================================
+# DEVELOPMENT DEPENDENCIES (Optional)
+# =====================================================
+
+# Testing framework
+# pytest>=6.0.0
+# pytest-cov>=3.0.0
+
+# Code quality and formatting
+# black>=22.0.0
+# flake8>=4.0.0
+# mypy>=0.991
+
+# Documentation generation
+# sphinx>=4.0.0
+# sphinx-rtd-theme>=1.0.0
+
+# Performance monitoring
+# memory-profiler>=0.60.0
+
+# =====================================================
+# SPECIALIZED DEPENDENCIES (Optional)
+# =====================================================
+
+# Network visualization (requires system graphviz)
+# pygraphviz>=1.7
+
+# Additional molecular formats
+# openmm>=7.7.0          # OpenMM trajectory support
+# parmed>=3.4.0          # AMBER parameter files
+# rdkit>=2022.03.0       # Chemical informatics
+
+# GPU acceleration (if available)
+# cupy>=10.0.0           # GPU-accelerated NumPy
+# tensorflow>=2.8.0      # Machine learning (future features)
+
+# =====================================================
+# INSTALLATION NOTES
+# =====================================================
+
+# System Requirements:
+# - Python >= 3.8 (Python 3.10 recommended for PyEMMA)
+# - 8GB+ RAM for large protein systems
+# - Optional: GPU for enhanced performance
+
+# Recommended Installation (Conda):
+# conda create -n mdcompare python=3.10
+# conda activate mdcompare
+# conda install -c conda-forge pyemma python-igraph leidenalg
 # pip install -r requirements.txt
+
+# Alternative Installation (pip only):
+# python -m venv .venv
+# source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# pip install -r requirements.txt
+
+# PyEMMA Installation Issues:
+# If PyEMMA installation fails, try:
+# conda install -c conda-forge pyemma
+# OR pip install --only-binary=all pyemma
+# OR use Python 3.8-3.10 for better compatibility
+
+# For GPU support:
+# pip install cupy-cuda11x  # Replace with your CUDA version
+
+# Troubleshooting:
+# - Windows: May require Visual C++ Build Tools for compilation
+# - macOS: May require Xcode command line tools
+# - Linux: Install build-essential and python3-dev packages
 
