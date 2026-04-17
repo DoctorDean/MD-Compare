@@ -9,6 +9,7 @@ MD simulations using various network analysis methods.
 
 import os
 import sys
+import time
 import numpy as np
 import pickle
 import json
@@ -683,7 +684,8 @@ class NetworkAnalyzer:
             if self.config.compute_energy_landscape and 'principal_components' in pca_results:
                 print("Computing energy landscape...")
                 landscape_results = self._compute_energy_landscape(pca_results['principal_components'])
-                dynamic_results.update(landscape_results)
+                # Store landscape results as a nested dictionary to maintain structure
+                dynamic_results['energy_landscape'] = landscape_results
             
         # PyEMMA Markov State Model analysis
         if self.config.compute_msm and PYEMMA_AVAILABLE:
@@ -2259,6 +2261,12 @@ class NetworkAnalyzer:
             allosteric_results['pathways'] = pathways
             allosteric_results['communication_efficiency'] = communication_scores
             
+            # Compute full communication efficiency matrix for all residue pairs
+            print("  Computing full communication efficiency matrix...")
+            full_efficiency_matrix, residue_labels = self._compute_full_communication_matrix(G)
+            allosteric_results['full_efficiency_matrix'] = full_efficiency_matrix
+            allosteric_results['residue_labels'] = residue_labels
+            
             # Identify allosteric hotspots (nodes frequently on pathways)
             hotspots = self._identify_allosteric_hotspots(pathways, G)
             allosteric_results['allosteric_hotspots'] = hotspots
@@ -2405,6 +2413,61 @@ class NetworkAnalyzer:
         hotspots.sort(key=lambda x: x['hotspot_score'], reverse=True)
         
         return hotspots[:20]  # Top 20 hotspots
+    
+    def _compute_full_communication_matrix(self, G: nx.Graph) -> Tuple[np.ndarray, List[str]]:
+        """
+        Compute communication efficiency matrix for all residue pairs in the network
+        
+        Parameters:
+        -----------
+        G : nx.Graph
+            Network graph
+            
+        Returns:
+        --------
+        Tuple[np.ndarray, List[str]]
+            Full communication efficiency matrix and residue labels
+        """
+        # Get all residues from the network (sorted for consistency)
+        all_residues = sorted(list(G.nodes()))
+        n_residues = len(all_residues)
+        
+        # Initialize efficiency matrix
+        efficiency_matrix = np.zeros((n_residues, n_residues))
+        
+        # Compute all-pairs shortest paths for efficiency
+        try:
+            # Use NetworkX all_pairs_shortest_path_length for efficiency
+            path_lengths = dict(nx.all_pairs_shortest_path_length(G))
+            
+            for i, source in enumerate(all_residues):
+                for j, target in enumerate(all_residues):
+                    if i == j:
+                        efficiency_matrix[i, j] = 1.0  # Perfect self-communication
+                    else:
+                        path_length = path_lengths.get(source, {}).get(target, float('inf'))
+                        if path_length < float('inf') and path_length > 0:
+                            efficiency_matrix[i, j] = 1.0 / path_length
+                        else:
+                            efficiency_matrix[i, j] = 0.0  # No path exists
+        except Exception as e:
+            print(f"Warning: Error computing full communication matrix: {e}")
+            # Fallback: compute pairwise
+            for i, source in enumerate(all_residues):
+                for j, target in enumerate(all_residues):
+                    if i == j:
+                        efficiency_matrix[i, j] = 1.0
+                    else:
+                        try:
+                            path_length = self._safe_shortest_path_length(G, source, target)
+                            if path_length > 0:
+                                efficiency_matrix[i, j] = 1.0 / path_length
+                            else:
+                                efficiency_matrix[i, j] = 0.0
+                        except:
+                            efficiency_matrix[i, j] = 0.0
+        
+        return efficiency_matrix, all_residues
     
     def _analyze_pathway_redundancy(self, pathways: List[Dict[str, Any]], G: nx.Graph) -> Dict[str, Any]:
         """Analyze redundancy in allosteric communication"""
@@ -3042,55 +3105,204 @@ class OutputManager:
     
     def __init__(self, output_dir: str = "md_compare_results"):
         """
-        Initialize output manager
+        Initialize output manager with organized subdirectories
         
         Parameters:
         -----------
         output_dir : str
-            Directory for saving outputs
+            Base directory for saving outputs
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
         
+        # Create organized subdirectories for different analysis types
+        self.subdirs = {
+            'networks': self.output_dir / '01_residue_interaction_networks',
+            'dccm': self.output_dir / '02_dynamic_cross_correlations',
+            'pca': self.output_dir / '03_principal_component_analysis',
+            'landscapes': self.output_dir / '04_energy_landscapes',
+            'msm': self.output_dir / '05_markov_state_models',
+            'allosteric': self.output_dir / '06_allosteric_pathways',
+            'reports': self.output_dir / '07_summary_reports'
+        }
+        
+        # Create all subdirectories
+        for subdir in self.subdirs.values():
+            subdir.mkdir(exist_ok=True, parents=True)
+        
+        print(f"Output directory structure created at: {self.output_dir}")
+        print("Organized subdirectories:")
+        for analysis_type, path in self.subdirs.items():
+            print(f"  {analysis_type}: {path.name}")
+    
+    def get_analysis_dir(self, analysis_type: str) -> Path:
+        """Get the appropriate subdirectory for an analysis type"""
+        return self.subdirs.get(analysis_type, self.output_dir)
+        
     def save_simulation_results(self, simulation: MDSimulation, prefix: str = None):
-        """Save results for a single simulation"""
+        """Save results for a single simulation with organized directory structure"""
         if prefix is None:
             prefix = simulation.name
         
-        # Save contact maps
+        # Save contact maps in networks directory
+        networks_dir = self.get_analysis_dir('networks')
         for itype, contact_matrix in simulation.contact_maps.items():
-            np.save(self.output_dir / f"{prefix}_{itype}_contacts.npy", contact_matrix)
+            np.save(networks_dir / f"{prefix}_{itype}_contacts.npy", contact_matrix)
             
             # Save as CSV if not too large
             if contact_matrix.size < 1000000:
                 np.savetxt(
-                    self.output_dir / f"{prefix}_{itype}_contacts.csv",
+                    networks_dir / f"{prefix}_{itype}_contacts.csv",
                     contact_matrix,
                     delimiter=",",
                     header=",".join(simulation.unique_residue_keys),
                     comments=""
                 )
         
-        # Save network
+        # Save network topology in networks directory
         if simulation.network_metrics and simulation.network_metrics.network:
             nx.write_graphml(
                 simulation.network_metrics.network,
-                self.output_dir / f"{prefix}_network.graphml"
+                networks_dir / f"{prefix}_network.graphml"
             )
         
-        # Save centrality data
+        # Save centrality data in networks directory
         if simulation.network_metrics:
             self._save_centrality_data(simulation, prefix)
         
-        # Save dynamic analysis results
+        # Save dynamic analysis results in appropriate directories
         if hasattr(simulation, 'dynamic_analysis') and simulation.dynamic_analysis:
             self._save_dynamic_analysis_data(simulation, prefix)
         
         # Save advanced network analysis results
         self._save_advanced_network_data(simulation, prefix)
         
-        # Save system info
-        self._save_system_info(simulation, prefix)
+        # Create summary report
+        self._save_summary_report(simulation, prefix)
+    
+    def _save_summary_report(self, simulation: MDSimulation, prefix: str):
+        """Generate comprehensive summary report in reports directory"""
+        try:
+            reports_dir = self.get_analysis_dir('reports')
+            
+            # Create JSON summary report
+            summary_data = {
+                'analysis_info': {
+                    'simulation_name': simulation.name,
+                    'analysis_timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
+                    'software_version': '1.4.0',
+                    'analysis_type': 'comprehensive_protein_dynamics'
+                },
+                'system_summary': simulation.get_system_summary() if hasattr(simulation, 'get_system_summary') else {},
+                'network_summary': self._extract_network_summary(simulation),
+                'dynamic_summary': self._extract_dynamic_summary(simulation),
+                'msm_summary': self._extract_msm_summary(simulation),
+                'output_structure': {
+                    'networks': '01_residue_interaction_networks/',
+                    'dccm': '02_dynamic_cross_correlations/',
+                    'pca': '03_principal_component_analysis/',
+                    'landscapes': '04_energy_landscapes/',
+                    'msm': '05_markov_state_models/',
+                    'allosteric': '06_allosteric_pathways/',
+                    'reports': '07_summary_reports/'
+                }
+            }
+            
+            with open(reports_dir / f"{prefix}_complete_analysis_report.json", 'w', encoding='utf-8') as f:
+                json.dump(summary_data, f, indent=2, default=str)
+            
+            # Create human-readable summary
+            with open(reports_dir / f"{prefix}_analysis_summary.txt", 'w', encoding='utf-8') as f:
+                f.write("MD-Compare Comprehensive Analysis Summary\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"Analysis: {simulation.name}\n")
+                f.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Software: MD-Compare v1.4.0\n\n")
+                
+                # System overview
+                system_info = simulation.get_system_summary() if hasattr(simulation, 'get_system_summary') else {}
+                if system_info:
+                    f.write("System Overview:\n")
+                    f.write(f"  Total residues: {system_info.get('total_residues', 'N/A')}\n")
+                    f.write(f"  Total atoms: {system_info.get('total_atoms', 'N/A')}\n")
+                    f.write(f"  Chains: {len(system_info.get('chain_info', {}))}\n\n")
+                
+                # Analysis components
+                f.write("Analysis Components Completed:\n")
+                if simulation.network_metrics:
+                    f.write("  ✓ Network topology analysis\n")
+                    f.write("  ✓ Centrality measures\n")
+                    f.write("  ✓ Community detection\n")
+                    if hasattr(simulation.network_metrics, 'allosteric_pathways'):
+                        f.write("  ✓ Allosteric pathway analysis\n")
+                        f.write("  ✓ Communication efficiency matrix\n")
+                
+                if hasattr(simulation, 'dynamic_analysis') and simulation.dynamic_analysis:
+                    f.write("  ✓ Dynamic cross-correlation analysis\n")
+                    f.write("  ✓ Principal component analysis\n")
+                    if 'energy_landscape' in simulation.dynamic_analysis:
+                        f.write("  ✓ Free energy landscape analysis\n")
+                    if 'msm_analysis' in simulation.dynamic_analysis:
+                        f.write("  ✓ Markov State Model analysis\n")
+                        f.write("  ✓ Kinetic modeling with PyEMMA\n")
+                
+                f.write(f"\nOutput Structure:\n")
+                f.write(f"  Results organized in: {self.output_dir}\n")
+                f.write(f"  Subdirectories:\n")
+                for analysis_type, subdir in summary_data['output_structure'].items():
+                    f.write(f"    {analysis_type}: {subdir}\n")
+                
+        except Exception as e:
+            print(f"Warning: Could not create summary report: {e}")
+    
+    def _extract_network_summary(self, simulation: MDSimulation) -> Dict[str, Any]:
+        """Extract network analysis summary"""
+        if not simulation.network_metrics:
+            return {}
+        
+        metrics = simulation.network_metrics
+        summary = {
+            'network_size': len(metrics.network.nodes()) if metrics.network else 0,
+            'network_edges': len(metrics.network.edges()) if metrics.network else 0,
+            'communities_found': len(metrics.communities or []),
+            'has_allosteric_analysis': hasattr(metrics, 'allosteric_pathways') and metrics.allosteric_pathways
+        }
+        
+        return summary
+    
+    def _extract_dynamic_summary(self, simulation: MDSimulation) -> Dict[str, Any]:
+        """Extract dynamic analysis summary"""
+        if not hasattr(simulation, 'dynamic_analysis') or not simulation.dynamic_analysis:
+            return {}
+        
+        dynamic_data = simulation.dynamic_analysis
+        summary = {
+            'has_dccm': 'dccm_matrix' in dynamic_data,
+            'has_pca': 'pca_eigenvalues' in dynamic_data,
+            'has_energy_landscape': 'energy_landscape' in dynamic_data,
+            'pca_components': dynamic_data.get('pca_n_components', 0)
+        }
+        
+        return summary
+    
+    def _extract_msm_summary(self, simulation: MDSimulation) -> Dict[str, Any]:
+        """Extract MSM analysis summary"""
+        if not hasattr(simulation, 'dynamic_analysis') or not simulation.dynamic_analysis:
+            return {}
+        
+        msm_data = simulation.dynamic_analysis.get('msm_analysis', {})
+        if 'error' in msm_data:
+            return {'status': 'failed', 'error': msm_data['error']}
+        
+        summary = {
+            'status': 'completed',
+            'n_states': getattr(msm_data.get('msm_model'), 'nstates', 0) if msm_data.get('msm_model') else 0,
+            'lag_time': msm_data.get('msm_lag_time', 0),
+            'n_timescales': len(msm_data.get('msm_timescales', [])),
+            'has_metastable_analysis': 'metastable_states' in msm_data
+        }
+        
+        return summary
     
     def save_comparison_results(self, comparator: MDComparator, prefix: str = "comparison"):
         """Save comparison results"""
@@ -3105,10 +3317,11 @@ class OutputManager:
             pickle.dump(report, f)
     
     def _save_centrality_data(self, simulation: MDSimulation, prefix: str):
-        """Save centrality measures as CSV"""
+        """Save centrality measures as CSV in networks directory"""
         if not simulation.network_metrics:
             return
             
+        networks_dir = self.get_analysis_dir('networks')
         centrality_data = []
         for res_key in simulation.unique_residue_keys:
             chain, resid = res_key.split('_')
@@ -3123,7 +3336,7 @@ class OutputManager:
             ])
         
         np.savetxt(
-            self.output_dir / f"{prefix}_centrality.csv",
+            networks_dir / f"{prefix}_centrality.csv",
             centrality_data,
             delimiter=",",
             header="residue_key,chain,resid,betweenness,closeness,eigenvector,degree",
@@ -3132,8 +3345,9 @@ class OutputManager:
         )
     
     def _save_system_info(self, simulation: MDSimulation, prefix: str):
-        """Save system information"""
-        with open(self.output_dir / f"{prefix}_system_info.txt", 'w', encoding='utf-8') as f:
+        """Save system information in reports directory"""
+        reports_dir = self.get_analysis_dir('reports')
+        with open(reports_dir / f"{prefix}_system_info.txt", 'w', encoding='utf-8') as f:
             summary = simulation.get_system_summary()
             f.write(f"MD Simulation Analysis: {simulation.name}\n")
             f.write("=" * 50 + "\n\n")
@@ -3150,20 +3364,21 @@ class OutputManager:
                 f.write(f"    Atoms: {info['atom_count']}\n\n")
     
     def _save_dynamic_analysis_data(self, simulation: MDSimulation, prefix: str):
-        """Save dynamic analysis results (DCCM and PCA)"""
+        """Save dynamic analysis results (DCCM and PCA) in appropriate directories"""
         if not hasattr(simulation, 'dynamic_analysis') or not simulation.dynamic_analysis:
             return
             
         dynamic_data = simulation.dynamic_analysis
         
-        # Save DCCM matrix
+        # Save DCCM data in DCCM directory
         if 'dccm_matrix' in dynamic_data and dynamic_data['dccm_matrix'] is not None:
-            np.save(self.output_dir / f"{prefix}_dccm_matrix.npy", dynamic_data['dccm_matrix'])
+            dccm_dir = self.get_analysis_dir('dccm')
+            np.save(dccm_dir / f"{prefix}_dccm_matrix.npy", dynamic_data['dccm_matrix'])
             
             # Save as CSV if not too large
             if dynamic_data['dccm_matrix'].size < 1000000:
                 np.savetxt(
-                    self.output_dir / f"{prefix}_dccm_matrix.csv",
+                    dccm_dir / f"{prefix}_dccm_matrix.csv",
                     dynamic_data['dccm_matrix'],
                     delimiter=",",
                     fmt="%.6f",
@@ -3173,17 +3388,18 @@ class OutputManager:
             # Create DCCM visualization
             self._create_dccm_visualization(dynamic_data['dccm_matrix'], prefix)
         
-        # Save PCA results
+        # Save PCA data in PCA directory
         if 'pca_eigenvalues' in dynamic_data and dynamic_data['pca_eigenvalues'] is not None:
-            np.save(self.output_dir / f"{prefix}_pca_eigenvalues.npy", dynamic_data['pca_eigenvalues'])
-            np.save(self.output_dir / f"{prefix}_pca_eigenvectors.npy", dynamic_data['pca_eigenvectors'])
-            np.save(self.output_dir / f"{prefix}_pca_variance_explained.npy", dynamic_data['pca_variance_explained'])
+            pca_dir = self.get_analysis_dir('pca')
+            np.save(pca_dir / f"{prefix}_pca_eigenvalues.npy", dynamic_data['pca_eigenvalues'])
+            np.save(pca_dir / f"{prefix}_pca_eigenvectors.npy", dynamic_data['pca_eigenvectors'])
+            np.save(pca_dir / f"{prefix}_pca_variance_explained.npy", dynamic_data['pca_variance_explained'])
             
             if 'principal_components' in dynamic_data and dynamic_data['principal_components'] is not None:
-                np.save(self.output_dir / f"{prefix}_principal_components.npy", dynamic_data['principal_components'])
+                np.save(pca_dir / f"{prefix}_principal_components.npy", dynamic_data['principal_components'])
             
             # Save PCA summary
-            with open(self.output_dir / f"{prefix}_pca_summary.txt", 'w', encoding='utf-8') as f:
+            with open(pca_dir / f"{prefix}_pca_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Principal Component Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 f.write(f"Number of components: {dynamic_data.get('pca_n_components', 'N/A')}\n")
@@ -3201,48 +3417,86 @@ class OutputManager:
             # Create PCA visualization
             self._create_pca_visualization(dynamic_data, prefix)
         
-        # Save energy landscape results
+        # Save energy landscape data in landscapes directory if available
         if 'energy_landscape' in dynamic_data and dynamic_data['energy_landscape'] is not None:
-            # Save landscape data
-            np.save(self.output_dir / f"{prefix}_energy_landscape.npy", dynamic_data['energy_landscape'])
-            np.save(self.output_dir / f"{prefix}_landscape_pc1_bins.npy", dynamic_data['landscape_pc1_bins'])
-            np.save(self.output_dir / f"{prefix}_landscape_pc2_bins.npy", dynamic_data['landscape_pc2_bins'])
-            np.save(self.output_dir / f"{prefix}_landscape_gradient_x.npy", dynamic_data['landscape_gradient_x'])
-            np.save(self.output_dir / f"{prefix}_landscape_gradient_y.npy", dynamic_data['landscape_gradient_y'])
-            np.save(self.output_dir / f"{prefix}_landscape_laplacian.npy", dynamic_data['landscape_laplacian'])
+            landscapes_dir = self.get_analysis_dir('landscapes')
+            landscape_data = dynamic_data['energy_landscape']
             
-            # Save landscape summary
-            with open(self.output_dir / f"{prefix}_landscape_summary.txt", 'w', encoding='utf-8') as f:
-                f.write("Energy Landscape Analysis Summary\n")
-                f.write("=" * 40 + "\n")
-                f.write(f"Temperature: {dynamic_data.get('landscape_temperature', 'N/A')} K\n")
-                f.write(f"Total frames analyzed: {dynamic_data.get('landscape_total_frames', 'N/A')}\n")
+            # Check if landscape_data is a dictionary (expected) or numpy array
+            if isinstance(landscape_data, dict):
+                # Save landscape data with correct key names from _compute_energy_landscape
+                if 'energy_landscape' in landscape_data:
+                    np.save(landscapes_dir / f"{prefix}_free_energy_surface.npy", 
+                           landscape_data['energy_landscape'])  # Changed from 'free_energy_surface'
                 
-                energy_range = dynamic_data.get('landscape_energy_range', [0, 0])
-                f.write(f"Energy range: {energy_range[0]:.1f} to {energy_range[1]:.1f} kJ/mol\n")
+                if 'landscape_pc1_bins' in landscape_data and 'landscape_pc2_bins' in landscape_data:
+                    np.savetxt(landscapes_dir / f"{prefix}_pc1_centers.csv", 
+                              landscape_data['landscape_pc1_bins'], delimiter=",")  # Changed from 'pc1_centers'
+                    np.savetxt(landscapes_dir / f"{prefix}_pc2_centers.csv", 
+                              landscape_data['landscape_pc2_bins'], delimiter=",")  # Changed from 'pc2_centers'
                 
-                # Minima information
-                minima = dynamic_data.get('landscape_minima', [])
-                f.write(f"\nNumber of energy minima found: {len(minima)}\n")
-                if minima:
-                    f.write("Top 5 energy minima (PC1, PC2, Energy):\n")
-                    for i, (pc1, pc2, energy) in enumerate(minima[:5]):
-                        f.write(f"  {i+1}: PC1={pc1:.3f}, PC2={pc2:.3f}, E={energy:.1f} kJ/mol\n")
+                # Save landscape summary
+                with open(landscapes_dir / f"{prefix}_landscape_summary.txt", 'w', encoding='utf-8') as f:
+                    f.write("Free Energy Landscape Analysis Summary\n")
+                    f.write("=" * 45 + "\n")
+                    f.write(f"Temperature: {landscape_data.get('landscape_temperature', 300)} K\n")  # Changed key name
+                    f.write(f"Number of bins: {landscape_data.get('n_bins', 'N/A')}\n")
+                    f.write(f"PC1 range: {landscape_data.get('pc1_range', 'N/A')}\n")
+                    f.write(f"PC2 range: {landscape_data.get('pc2_range', 'N/A')}\n")
+                    
+                    # Use correct energy range data structure
+                    energy_range = landscape_data.get('landscape_energy_range', [0, 0])
+                    if len(energy_range) >= 2:
+                        f.write(f"Min energy: {energy_range[0]:.3f} kT\n")
+                        f.write(f"Max energy: {energy_range[1]:.3f} kT\n")
+                    else:
+                        f.write(f"Min energy: N/A\n")
+                        f.write(f"Max energy: N/A\n")
                 
-                # Barrier information
-                barriers = dynamic_data.get('landscape_barriers', [])
-                f.write(f"\nNumber of energy barriers analyzed: {len(barriers)}\n")
-                if barriers:
-                    f.write("Top 3 energy barriers:\n")
-                    for i, barrier in enumerate(barriers[:3]):
-                        height = barrier['barrier_height']
-                        f.write(f"  {i+1}: Barrier height = {height:.1f} kJ/mol\n")
+                # Create landscape visualization
+                print(f"  Energy landscape data available - attempting visualization...")
+                try:
+                    self._create_landscape_visualization(landscape_data, prefix)
+                except Exception as viz_error:
+                    print(f"Warning: Could not create landscape visualization: {viz_error}")
+                    import traceback
+                    print(traceback.format_exc())
             
-            # Create landscape visualizations
-            self._create_landscape_visualization(dynamic_data, prefix)
+            elif isinstance(landscape_data, np.ndarray):
+                # landscape_data is just the energy surface array
+                np.save(landscapes_dir / f"{prefix}_free_energy_surface.npy", landscape_data)
+                
+                # Save basic summary
+                with open(landscapes_dir / f"{prefix}_landscape_summary.txt", 'w', encoding='utf-8') as f:
+                    f.write("Free Energy Landscape Analysis Summary\n")
+                    f.write("=" * 45 + "\n")
+                    f.write(f"Energy surface shape: {landscape_data.shape}\n")
+                    f.write(f"Min energy: {np.min(landscape_data):.3f} kT\n")
+                    f.write(f"Max energy: {np.max(landscape_data):.3f} kT\n")
+                    f.write(f"Temperature: 300 K (default)\n")
+                
+                # Try to create basic visualization
+                try:
+                    # Create a simple dict structure for visualization
+                    viz_data = {
+                        'energy_landscape': landscape_data,
+                        'temperature': 300
+                    }
+                    self._create_landscape_visualization(viz_data, prefix)
+                except Exception as viz_error:
+                    print(f"Warning: Could not create landscape visualization: {viz_error}")
+            
+            else:
+                print(f"Warning: Unexpected landscape_data type: {type(landscape_data)}")
+                # Try to save as numpy array anyway
+                try:
+                    np.save(landscapes_dir / f"{prefix}_energy_landscape_raw.npy", landscape_data)
+                except Exception as e:
+                    print(f"Could not save energy landscape: {e}")
         
         # Save dynamic analysis summary
-        with open(self.output_dir / f"{prefix}_dynamic_summary.txt", 'w', encoding='utf-8') as f:
+        reports_dir = self.get_analysis_dir('reports')
+        with open(reports_dir / f"{prefix}_dynamic_summary.txt", 'w', encoding='utf-8') as f:
             f.write("Dynamic Analysis Summary\n")
             f.write("=" * 30 + "\n")
             
@@ -3277,10 +3531,11 @@ class OutputManager:
         # Save PyEMMA MSM analysis results
         if 'msm_analysis' in dynamic_data and dynamic_data['msm_analysis']:
             msm_data = dynamic_data['msm_analysis']
+            msm_dir = self.get_analysis_dir('msm')
             
             if 'error' not in msm_data:
                 # Save MSM summary
-                with open(self.output_dir / f"{prefix}_msm_summary.txt", 'w', encoding='utf-8') as f:
+                with open(msm_dir / f"{prefix}_msm_summary.txt", 'w', encoding='utf-8') as f:
                     f.write("PyEMMA Markov State Model Analysis Summary\n")
                     f.write("=" * 45 + "\n")
                     
@@ -3332,17 +3587,17 @@ class OutputManager:
                 # Save discrete trajectory
                 if 'msm_discretized_trajectory' in msm_data:
                     dtraj = msm_data['msm_discretized_trajectory']
-                    np.save(self.output_dir / f"{prefix}_discrete_trajectory.npy", dtraj)
+                    np.save(msm_dir / f"{prefix}_discrete_trajectory.npy", dtraj)
                 
                 # Save cluster centers if available
                 if 'msm_cluster_centers' in msm_data and msm_data['msm_cluster_centers'] is not None:
                     centers = msm_data['msm_cluster_centers']
-                    np.save(self.output_dir / f"{prefix}_cluster_centers.npy", centers)
+                    np.save(msm_dir / f"{prefix}_cluster_centers.npy", centers)
                 
                 # Save transition matrix
                 if 'msm_transition_matrix' in msm_data:
                     T_matrix = np.array(msm_data['msm_transition_matrix'])
-                    np.save(self.output_dir / f"{prefix}_transition_matrix.npy", T_matrix)
+                    np.save(msm_dir / f"{prefix}_transition_matrix.npy", T_matrix)
                     
                     # Save transition matrix as CSV for Excel viewing
                     if PANDAS_AVAILABLE:
@@ -3352,7 +3607,7 @@ class OutputManager:
                             n_states = T_matrix.shape[0]
                             state_labels = [f'State_{i}' for i in range(n_states)]
                             T_df = pd.DataFrame(T_matrix, index=state_labels, columns=state_labels)
-                            T_df.to_csv(self.output_dir / f"{prefix}_transition_matrix.csv")
+                            T_df.to_csv(msm_dir / f"{prefix}_transition_matrix.csv")
                             print(f"  Saved transition matrix as CSV: {prefix}_transition_matrix.csv")
                             
                             # Save a summary version with only high-probability transitions
@@ -3360,25 +3615,25 @@ class OutputManager:
                             T_summary = T_matrix.copy()
                             T_summary[T_summary < threshold] = 0
                             T_summary_df = pd.DataFrame(T_summary, index=state_labels, columns=state_labels)
-                            T_summary_df.to_csv(self.output_dir / f"{prefix}_transition_matrix_summary.csv")
+                            T_summary_df.to_csv(msm_dir / f"{prefix}_transition_matrix_summary.csv")
                             print(f"  Saved filtered transition matrix as CSV: {prefix}_transition_matrix_summary.csv")
                             
                         except Exception as csv_error:
                             print(f"  Warning: Could not save CSV format: {csv_error}")
                             # Fallback: save as simple text file
-                            np.savetxt(self.output_dir / f"{prefix}_transition_matrix.txt", T_matrix, 
+                            np.savetxt(msm_dir / f"{prefix}_transition_matrix.txt", T_matrix, 
                                       fmt='%.6f', delimiter='\t')
                     else:
                         # Save as tab-delimited text file (can be opened in Excel)
                         print("  Pandas not available, saving as tab-delimited text file")
-                        np.savetxt(self.output_dir / f"{prefix}_transition_matrix.txt", T_matrix, 
+                        np.savetxt(msm_dir / f"{prefix}_transition_matrix.txt", T_matrix, 
                                   fmt='%.6f', delimiter='\t', 
                                   header='Transition Matrix - rows=from_state, columns=to_state')
                 
                 # Save timescales as CSV
                 if 'msm_timescales' in msm_data:
                     timescales = np.array(msm_data['msm_timescales'])
-                    np.save(self.output_dir / f"{prefix}_implied_timescales.npy", timescales)
+                    np.save(msm_dir / f"{prefix}_implied_timescales.npy", timescales)
                     
                     if PANDAS_AVAILABLE:
                         try:
@@ -3388,7 +3643,7 @@ class OutputManager:
                                 'Timescale_Value': timescales,
                                 'Process_Rate': 1.0 / timescales
                             })
-                            ts_df.to_csv(self.output_dir / f"{prefix}_implied_timescales.csv", index=False)
+                            ts_df.to_csv(msm_dir / f"{prefix}_implied_timescales.csv", index=False)
                             print(f"  Saved timescales as CSV: {prefix}_implied_timescales.csv")
                         except Exception:
                             # Fallback to text format
@@ -3482,18 +3737,19 @@ class OutputManager:
         
         # Save community detection results
         if hasattr(metrics, 'communities_detailed') and metrics.communities_detailed:
-            with open(self.output_dir / f"{prefix}_community_analysis.json", 'w', encoding='utf-8') as f:
+            networks_dir = self.get_analysis_dir('networks')
+            with open(networks_dir / f"{prefix}_community_analysis.json", 'w', encoding='utf-8') as f:
                 json.dump(metrics.communities_detailed, f, indent=2, default=str)
             
             # Save community assignments
             if hasattr(metrics, 'community_node_assignments') and metrics.community_node_assignments:
-                with open(self.output_dir / f"{prefix}_community_assignments.csv", 'w', encoding='utf-8') as f:
+                with open(networks_dir / f"{prefix}_community_assignments.csv", 'w', encoding='utf-8') as f:
                     f.write("node,community_id\n")
                     for node, comm_id in metrics.community_node_assignments.items():
                         f.write(f"{node},{comm_id}\n")
             
             # Save community summary
-            with open(self.output_dir / f"{prefix}_community_summary.txt", 'w', encoding='utf-8') as f:
+            with open(networks_dir / f"{prefix}_community_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Community Detection Analysis Summary\n")
                 f.write("=" * 45 + "\n")
                 f.write(f"Method: {metrics.communities_detailed.get('method', 'N/A')}\n")
@@ -3511,10 +3767,11 @@ class OutputManager:
         
         # Save path metrics
         if hasattr(metrics, 'path_metrics') and metrics.path_metrics:
-            with open(self.output_dir / f"{prefix}_path_metrics.json", 'w') as f:
+            networks_dir = self.get_analysis_dir('networks')
+            with open(networks_dir / f"{prefix}_path_metrics.json", 'w') as f:
                 json.dump(metrics.path_metrics, f, indent=2, default=str)
             
-            with open(self.output_dir / f"{prefix}_path_summary.txt", 'w', encoding='utf-8') as f:
+            with open(networks_dir / f"{prefix}_path_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Path Analysis Summary\n")
                 f.write("=" * 25 + "\n")
                 pm = metrics.path_metrics
@@ -3534,10 +3791,11 @@ class OutputManager:
         
         # Save allosteric pathway analysis
         if hasattr(metrics, 'allosteric_pathways') and metrics.allosteric_pathways:
-            with open(self.output_dir / f"{prefix}_allosteric_analysis.json", 'w') as f:
+            allosteric_dir = self.get_analysis_dir('allosteric')
+            with open(allosteric_dir / f"{prefix}_allosteric_analysis.json", 'w') as f:
                 json.dump(metrics.allosteric_pathways, f, indent=2, default=str)
             
-            with open(self.output_dir / f"{prefix}_allosteric_summary.txt", 'w', encoding='utf-8') as f:
+            with open(allosteric_dir / f"{prefix}_allosteric_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Allosteric Pathway Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 ap = metrics.allosteric_pathways
@@ -3578,19 +3836,28 @@ class OutputManager:
             
             # Save hotspots as CSV for easy analysis
             if hotspots:
-                with open(self.output_dir / f"{prefix}_allosteric_hotspots.csv", 'w', encoding='utf-8') as f:
+                with open(allosteric_dir / f"{prefix}_allosteric_hotspots.csv", 'w', encoding='utf-8') as f:
                     f.write("node,hotspot_score,frequency,pathway_count,avg_efficiency\n")
                     for hotspot in hotspots:
-                        f.write(f"{hotspot['node']},{hotspot['hotspot_score']:.4f},"
+                        f.write(f"{hotspot['node']},{hotspot['hotspot_score']:.6f},"
                                f"{hotspot['frequency']},{hotspot['pathway_count']},"
-                               f"{hotspot['avg_communication_efficiency']:.4f}\n")
+                               f"{hotspot.get('avg_communication_efficiency', 0.0):.6f}\n")
+            
+            # Save full communication efficiency matrix as CSV
+            if 'full_efficiency_matrix' in ap and 'residue_labels' in ap:
+                self._save_communication_efficiency_csv(
+                    ap['full_efficiency_matrix'], 
+                    ap['residue_labels'], 
+                    prefix
+                )
         
         # Save network robustness analysis
         if hasattr(metrics, 'network_robustness') and metrics.network_robustness:
-            with open(self.output_dir / f"{prefix}_robustness_analysis.json", 'w') as f:
+            networks_dir = self.get_analysis_dir('networks')
+            with open(networks_dir / f"{prefix}_robustness_analysis.json", 'w') as f:
                 json.dump(metrics.network_robustness, f, indent=2, default=str)
             
-            with open(self.output_dir / f"{prefix}_robustness_summary.txt", 'w', encoding='utf-8') as f:
+            with open(networks_dir / f"{prefix}_robustness_summary.txt", 'w', encoding='utf-8') as f:
                 f.write("Network Robustness Analysis Summary\n")
                 f.write("=" * 40 + "\n")
                 nr = metrics.network_robustness
@@ -3612,14 +3879,15 @@ class OutputManager:
         
         # Save centrality significance scores
         if hasattr(metrics, 'centrality_z_scores') and metrics.centrality_z_scores:
+            networks_dir = self.get_analysis_dir('networks')
             # Save detailed z-scores
-            with open(self.output_dir / f"{prefix}_centrality_significance.json", 'w') as f:
+            with open(networks_dir / f"{prefix}_centrality_significance.json", 'w') as f:
                 json.dump(metrics.centrality_z_scores, f, indent=2, default=str)
             
             # Save significant nodes CSV
             sig_nodes = metrics.centrality_z_scores.get('significant_nodes', {})
             if any(sig_nodes.values()):
-                with open(self.output_dir / f"{prefix}_significant_nodes.csv", 'w', encoding='utf-8') as f:
+                with open(networks_dir / f"{prefix}_significant_nodes.csv", 'w', encoding='utf-8') as f:
                     f.write("node,significance_level,betweenness_z,closeness_z,degree_z,eigenvector_z\n")
                     
                     all_z_scores = {
@@ -3683,8 +3951,9 @@ class OutputManager:
             plt.ylabel('Residue Index')
             plt.tight_layout()
             
-            # Save plot
-            plt.savefig(self.output_dir / f"{prefix}_dccm_heatmap.png", dpi=300, bbox_inches='tight')
+            # Save plot in DCCM directory
+            dccm_dir = self.get_analysis_dir('dccm')
+            plt.savefig(dccm_dir / f"{prefix}_dccm_heatmap.png", dpi=300, bbox_inches='tight')
             plt.close()
             
         except Exception as e:
@@ -3741,7 +4010,10 @@ class OutputManager:
                         ha='center', va='center', transform=ax4.transAxes)
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / f"{prefix}_pca_analysis.png", dpi=300, bbox_inches='tight')
+            
+            # Save plot in PCA directory
+            pca_dir = self.get_analysis_dir('pca')
+            plt.savefig(pca_dir / f"{prefix}_pca_analysis.png", dpi=300, bbox_inches='tight')
             plt.close()
             
         except Exception as e:
@@ -3754,12 +4026,93 @@ class OutputManager:
             import matplotlib.patches as patches
             from matplotlib.colors import LinearSegmentedColormap
             
+            # Check for basic energy landscape data
+            if 'energy_landscape' not in landscape_data:
+                print(f"Warning: No energy_landscape key found in data")
+                return
+            
             landscape = landscape_data['energy_landscape']
-            pc1_bins = landscape_data['landscape_pc1_bins']
-            pc2_bins = landscape_data['landscape_pc2_bins']
-            gradient_x = landscape_data['landscape_gradient_x']
-            gradient_y = landscape_data['landscape_gradient_y']
-            laplacian = landscape_data['landscape_laplacian']
+            
+            # Try to get detailed landscape data - if not available, continue with what we have
+            pc1_bins = landscape_data.get('landscape_pc1_bins')
+            pc2_bins = landscape_data.get('landscape_pc2_bins')
+            gradient_x = landscape_data.get('landscape_gradient_x')
+            gradient_y = landscape_data.get('landscape_gradient_y')
+            laplacian = landscape_data.get('landscape_laplacian')
+            minima = landscape_data.get('landscape_minima', [])
+            
+            # If we don't have bins, try alternative keys
+            if pc1_bins is None:
+                pc1_bins = landscape_data.get('pc1_centers')
+            if pc2_bins is None:
+                pc2_bins = landscape_data.get('pc2_centers')
+            
+            # Check if we have all components for detailed visualization
+            has_detailed_data = all(x is not None for x in [pc1_bins, pc2_bins])
+            
+            # Debug info
+            print(f"  Landscape data keys available: {list(landscape_data.keys())}")
+            print(f"  Has PC bins: pc1_bins={pc1_bins is not None}, pc2_bins={pc2_bins is not None}")
+            print(f"  Has gradients: gradient_x={gradient_x is not None}, gradient_y={gradient_y is not None}")
+            print(f"  Has laplacian: {laplacian is not None}")
+            print(f"  Has minima: {len(minima)} found")
+            
+            if has_detailed_data:
+                # Create the full 4-panel detailed visualization
+                print(f"  Creating detailed 4-panel energy landscape visualization...")
+                self._create_detailed_landscape_plot(landscape_data, prefix)
+            else:
+                # Create simplified visualization
+                print(f"  Creating simplified energy landscape visualization...")
+                self._create_simple_landscape_plot(landscape_data, prefix)
+                
+        except Exception as e:
+            print(f"Warning: Could not create landscape visualization: {e}")
+            import traceback
+            print(traceback.format_exc())
+    
+    def _create_simple_landscape_plot(self, landscape_data: Dict[str, Any], prefix: str):
+        """Create simple energy landscape plot when detailed data is not available"""
+        try:
+            import matplotlib.pyplot as plt
+            
+            landscape = landscape_data.get('energy_landscape')
+            if landscape is None:
+                return
+                
+            plt.figure(figsize=(10, 8))
+            
+            if isinstance(landscape, np.ndarray):
+                # Simple contour plot
+                plt.imshow(landscape, origin='lower', cmap='viridis', aspect='auto')
+                plt.colorbar(label='Free Energy (kT)')
+                plt.title(f'Free Energy Landscape')
+                plt.xlabel('PC1 (bins)')
+                plt.ylabel('PC2 (bins)')
+                
+                # Save plot
+                landscapes_dir = self.get_analysis_dir('landscapes')
+                plt.savefig(landscapes_dir / f"{prefix}_energy_landscape.png", 
+                           dpi=300, bbox_inches='tight')
+                plt.close()
+                print(f"  Saved simple energy landscape plot")
+                
+        except Exception as e:
+            print(f"Warning: Could not create simple landscape plot: {e}")
+    
+    def _create_detailed_landscape_plot(self, landscape_data: Dict[str, Any], prefix: str):
+        """Create detailed energy landscape visualization with all components"""
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as patches
+            from matplotlib.colors import LinearSegmentedColormap
+            
+            landscape = landscape_data['energy_landscape']
+            pc1_bins = landscape_data.get('landscape_pc1_bins', landscape_data.get('pc1_centers'))
+            pc2_bins = landscape_data.get('landscape_pc2_bins', landscape_data.get('pc2_centers'))
+            gradient_x = landscape_data.get('landscape_gradient_x')
+            gradient_y = landscape_data.get('landscape_gradient_y')
+            laplacian = landscape_data.get('landscape_laplacian')
             minima = landscape_data.get('landscape_minima', [])
             
             # Create comprehensive landscape visualization
@@ -3849,8 +4202,11 @@ class OutputManager:
             cbar4.set_label('∇²G (curvature)')
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / f"{prefix}_energy_landscape.png", dpi=300, bbox_inches='tight')
+            # Save basic energy landscape plot
+            landscapes_dir = self.get_analysis_dir('landscapes')
+            plt.savefig(landscapes_dir / f"{prefix}_energy_landscape.png", dpi=300, bbox_inches='tight')
             plt.close()
+            print(f"  Saved 4-panel energy landscape plot: {prefix}_energy_landscape.png")
             
             # Create separate detailed contour plot
             fig2, ax = plt.subplots(1, 1, figsize=(10, 8))
@@ -3889,8 +4245,11 @@ class OutputManager:
                    fontsize=10)
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / f"{prefix}_energy_landscape_detailed.png", dpi=300, bbox_inches='tight')
+            # Save detailed energy landscape plot  
+            landscapes_dir = self.get_analysis_dir('landscapes')
+            plt.savefig(landscapes_dir / f"{prefix}_energy_landscape_detailed.png", dpi=300, bbox_inches='tight')
             plt.close()
+            print(f"  Saved detailed energy landscape plot: {prefix}_energy_landscape_detailed.png")
             
         except Exception as e:
             print(f"Warning: Could not create energy landscape visualization: {e}")
@@ -4256,7 +4615,10 @@ class OutputManager:
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgray', alpha=0.8))
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / f"{prefix}_advanced_network_analysis.png", 
+            
+            # Save plot in networks directory
+            networks_dir = self.get_analysis_dir('networks')
+            plt.savefig(networks_dir / f"{prefix}_advanced_network_analysis.png", 
                        dpi=300, bbox_inches='tight')
             plt.close()
             
@@ -4455,7 +4817,9 @@ class OutputManager:
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8))
             
             plt.tight_layout()
-            plt.savefig(self.output_dir / f"{prefix}_msm_analysis.png", 
+            # Save plot in MSM directory
+            msm_dir = self.get_analysis_dir('msm')
+            plt.savefig(msm_dir / f"{prefix}_msm_analysis.png", 
                        dpi=300, bbox_inches='tight')
             plt.close()
             
@@ -4463,6 +4827,64 @@ class OutputManager:
             print(f"Warning: Could not create MSM visualization: {e}")
             import traceback
             print(traceback.format_exc())
+    
+    def _save_communication_efficiency_csv(self, efficiency_matrix: np.ndarray, 
+                                         residue_labels: List[str], prefix: str):
+        """
+        Save full communication efficiency matrix as CSV in allosteric directory
+        
+        Parameters:
+        -----------
+        efficiency_matrix : np.ndarray
+            Communication efficiency matrix
+        residue_labels : List[str]
+            Residue labels for matrix rows/columns
+        prefix : str
+            File prefix for output
+        """
+        try:
+            allosteric_dir = self.get_analysis_dir('allosteric')
+            if PANDAS_AVAILABLE:
+                import pandas as pd
+                # Create DataFrame with residue labels
+                eff_df = pd.DataFrame(efficiency_matrix, 
+                                    index=residue_labels, 
+                                    columns=residue_labels)
+                eff_df.to_csv(allosteric_dir / f"{prefix}_communication_efficiency_matrix.csv")
+                print(f"  Saved full communication efficiency matrix: {prefix}_communication_efficiency_matrix.csv")
+                
+                # Also save high-efficiency pairs summary
+                high_eff_pairs = []
+                threshold = 0.2  # Efficiency threshold for interesting pairs
+                
+                for i, source in enumerate(residue_labels):
+                    for j, target in enumerate(residue_labels):
+                        if i < j and efficiency_matrix[i, j] >= threshold:  # Upper triangle only
+                            high_eff_pairs.append({
+                                'Source_Residue': source,
+                                'Target_Residue': target,
+                                'Communication_Efficiency': efficiency_matrix[i, j],
+                                'Shortest_Path_Length': 1.0 / efficiency_matrix[i, j] if efficiency_matrix[i, j] > 0 else float('inf')
+                            })
+                
+                if high_eff_pairs:
+                    high_eff_df = pd.DataFrame(high_eff_pairs)
+                    high_eff_df = high_eff_df.sort_values('Communication_Efficiency', ascending=False)
+                    high_eff_df.to_csv(allosteric_dir / f"{prefix}_high_efficiency_pairs.csv", index=False)
+                    print(f"  Saved high-efficiency pairs: {prefix}_high_efficiency_pairs.csv")
+                
+            else:
+                # Fallback: save as tab-delimited text
+                header = '\t'.join(['Residue'] + residue_labels)
+                with open(allosteric_dir / f"{prefix}_communication_efficiency_matrix.txt", 'w', encoding='utf-8') as f:
+                    f.write(header + '\n')
+                    for i, source in enumerate(residue_labels):
+                        row = [source] + [f'{efficiency_matrix[i, j]:.6f}' for j in range(len(residue_labels))]
+                        f.write('\t'.join(row) + '\n')
+                print(f"  Saved communication efficiency matrix: {prefix}_communication_efficiency_matrix.txt")
+                
+        except Exception as e:
+            print(f"  Warning: Could not save communication efficiency matrix: {e}")
 
 
 # =====================================================
